@@ -74,6 +74,7 @@ struct ProductView: View {
         }
         .onAppear {
             selection = eligibleAccounts.first?.id ?? .init()
+            logger.info("[product-ui] appeared bundle=\(archive.package.software.bundleID) region=\(region) eligibleAccounts=\(eligibleAccounts.count)")
         }
         .navigationTitle("Select Account")
         .alert("License Required", isPresented: $showLicenseAlert) {
@@ -96,7 +97,9 @@ struct ProductView: View {
         Section {
             PackageDisplayView(archive: archive.package)
             NavigationLink {
-                ProductHistoryView(vm: AppPackageArchive(accountID: selection, region: region, package: archive.package))
+                // NavigationLink eagerly builds its destination on iOS 15.
+                // Defer the synchronous cache reads until navigation actually occurs.
+                LazyView(ProductHistoryView(vm: AppPackageArchive(accountID: selection, region: region, package: archive.package)))
             } label: {
                 let badgeText = archive.releaseDate.flatMap { date in
                     Text(date.formatted(.relative(presentation: .numeric)))
@@ -105,6 +108,9 @@ struct ProductView: View {
                 Text("Version \(archive.package.software.version)")
                     .badge(badgeText)
             }
+            .simultaneousGesture(TapGesture().onEnded {
+                logger.info("[history-ui] navigation tapped bundle=\(archive.package.software.bundleID) region=\(region) account=\(account == nil ? "missing" : "available")")
+            })
 
             if let formattedSize {
                 Text("Size")
@@ -248,5 +254,19 @@ extension AppStore.AppPackage {
     var displaySupportedDevicesIcon: String {
         // TODO: assuming iPhone for now
         "iphone"
+    }
+}
+
+/// Defers building its content until the view is actually rendered. This is
+/// required on iOS 15 because NavigationLink constructs destinations eagerly.
+struct LazyView<Content: View>: View {
+    private let build: () -> Content
+
+    init(_ build: @autoclosure @escaping () -> Content) {
+        self.build = build
+    }
+
+    var body: Content {
+        build()
     }
 }

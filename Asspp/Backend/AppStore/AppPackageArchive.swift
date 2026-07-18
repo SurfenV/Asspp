@@ -36,6 +36,7 @@ class AppPackageArchive: ObservableObject {
     private var operationTask: Task<Void, Never>?
 
     init(accountID: String?, region: String, package: AppStore.AppPackage) {
+        logger.info("[history-init] begin bundle=\(package.software.bundleID) region=\(region) account=\(accountID == nil ? "missing" : "available")")
         accountIdentifier = accountID
         self.region = region
         _package = .init(initialValue: package)
@@ -43,7 +44,9 @@ class AppPackageArchive: ObservableObject {
         let packageIdentifier = [package.id, package.software.bundleID.lowercased(), region]
             .joined()
             .lowercased()
+        logger.info("[history-init] loading metadata cache bundle=\(package.software.bundleID)")
         _versionItems = .init(key: "\(packageIdentifier).versions", defaultValue: [:])
+        logger.info("[history-init] loading version-ID cache bundle=\(package.software.bundleID)")
         _versionIdentifiers = .init(key: "\(packageIdentifier).versionNumbers", defaultValue: [])
         logger.info("[history] archive initialized bundle=\(package.software.bundleID) region=\(region) cachedIDs=\(versionIdentifiers.count) cachedMetadata=\(versionItems.count)")
     }
