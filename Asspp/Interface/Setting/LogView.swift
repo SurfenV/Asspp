@@ -46,25 +46,28 @@ struct LogView: View {
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
+                .disabled(!unlocked)
                 Button {
                     UIPasteboard.general.string = LogManager.shared.text()
                     showCopiedAlert = true
                 } label: {
                     Image(systemName: "doc.on.doc")
                 }
+                .disabled(!unlocked)
                 Button {
                     showShareSheet = true
                 } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
+                .disabled(!unlocked)
                 Button(role: .destructive) {
                     LogManager.shared.clear()
                     refresh()
                 } label: {
                     Image(systemName: "trash")
                 }
+                .disabled(!unlocked)
             }
-            .disabled(!unlocked)
         }
         .sheet(isPresented: $showShareSheet) {
             ActivityView(activityItems: [LogManager.shared.exportURL()])
