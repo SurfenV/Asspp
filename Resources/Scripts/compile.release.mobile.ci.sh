@@ -11,19 +11,28 @@ BUILD_PRODUCT="Asspp.app"
 
 cd $SRCROOT
 
-git clean -fdx -f
-git reset --hard
+BUILD_ARGS=(
+    -workspace "$WORKSPACE"
+    -scheme "$SCHEME"
+    -configuration Release
+    -derivedDataPath "$SRCROOT/build/DerivedDataApp"
+    -destination 'generic/platform=iOS'
+    clean build
+    CODE_SIGN_IDENTITY=""
+    CODE_SIGNING_REQUIRED=NO
+    CODE_SIGN_ENTITLEMENTS=""
+    CODE_SIGNING_ALLOWED=NO
+    GCC_GENERATE_DEBUGGING_SYMBOLS=YES
+    STRIP_INSTALLED_PRODUCT=NO
+    COPY_PHASE_STRIP=NO
+    UNSTRIPPED_PRODUCT=NO
+)
 
-xcodebuild -workspace "$WORKSPACE" \
-    -scheme "$SCHEME" \
-    -configuration Release \
-    -derivedDataPath "$SRCROOT/build/DerivedDataApp" \
-    -destination 'generic/platform=iOS' \
-    build \
-    CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED="NO" \
-    GCC_GENERATE_DEBUGGING_SYMBOLS=YES STRIP_INSTALLED_PRODUCT=NO \
-    COPY_PHASE_STRIP=NO UNSTRIPPED_PRODUCT=NO \
-    | xcbeautify
+if command -v xcbeautify >/dev/null 2>&1; then
+    xcodebuild "${BUILD_ARGS[@]}" | xcbeautify
+else
+    xcodebuild "${BUILD_ARGS[@]}"
+fi
 
 BUILD_PRODUCT_PATH=""
 for i in $(find "$SRCROOT/build/DerivedDataApp" -name "$BUILD_PRODUCT")

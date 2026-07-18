@@ -11,6 +11,7 @@ import ZIPFoundation
 public enum SignatureInjector {
     public static func inject(
         sinfs: [Sinf],
+        iTunesMetadata: Data,
         into packagePath: String
     ) async throws {
         let archive = try Archive(url: URL(fileURLWithPath: packagePath), accessMode: .update)
@@ -24,6 +25,8 @@ public enum SignatureInjector {
         } else {
             try ensureFailed("could not read manifest or info plist")
         }
+
+        try injectMetadata(iTunesMetadata, into: archive)
     }
 
     private static func readBundleName(from archive: Archive) throws -> String {
@@ -44,8 +47,7 @@ public enum SignatureInjector {
             if entry.path.hasSuffix(".app/SC_Info/Manifest.plist") {
                 var data = Data()
                 _ = try archive.extract(entry, consumer: { data.append($0) })
-                let manifest = try PropertyListDecoder().decode(PackageManifest.self, from: data)
-                return manifest
+                return try PropertyListDecoder().decode(PackageManifest.self, from: data)
             }
         }
         return nil
@@ -56,8 +58,7 @@ public enum SignatureInjector {
             if entry.path.contains(".app/Info.plist") {
                 var data = Data()
                 _ = try archive.extract(entry, consumer: { data.append($0) })
-                let info = try PropertyListDecoder().decode(PackageInfo.self, from: data)
-                return info
+                return try PropertyListDecoder().decode(PackageInfo.self, from: data)
             }
         }
         return nil
@@ -82,6 +83,25 @@ public enum SignatureInjector {
                 return sinf.sinf.subdata(in: start ..< end)
             })
         }
+    }
+
+    private static func injectMetadata(
+        _ metadata: Data,
+        into archive: Archive
+    ) throws {
+        let path = "iTunesMetadata.plist"
+        guard archive[path] == nil else { return }
+        try archive.addEntry(
+            with: path,
+            type: .file,
+            uncompressedSize: Int64(metadata.count),
+            compressionMethod: .deflate,
+            provider: { (position: Int64, size: Int) -> Data in
+                let start = metadata.startIndex.advanced(by: Int(position))
+                let end = start.advanced(by: size)
+                return metadata.subdata(in: start ..< end)
+            }
+        )
     }
 
     private static func injectFromInfo(

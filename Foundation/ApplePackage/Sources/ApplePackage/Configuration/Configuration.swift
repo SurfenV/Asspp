@@ -1,6 +1,6 @@
 //
 //  Configuration.swift
-//  IPATool
+//  ApplePackage
 //
 //  Created by QAQ on 2023/10/4.
 //
@@ -10,7 +10,7 @@ import Foundation
 import NIOSSL
 
 public enum Configuration {
-    /*
+    /**
      DeviceIdentifier is a unique identifier for your device.
 
      - On macOS, it is a MAC address and can be read by calling DeviceIdentifier.system.
@@ -19,7 +19,7 @@ public enum Configuration {
      **It is a must set value before any network request**
      **otherwise your account may be locked for security reason**
      */
-    public nonisolated(unsafe) static var deviceIdentifier: String = (try? DeviceIdentifier.system()) ?? "" {
+    public static var deviceIdentifier: String = (try? DeviceIdentifier.system()) ?? "" {
         didSet {
             assert(!deviceIdentifier.contains(":"))
             assert(!deviceIdentifier.contains("-"))
@@ -28,9 +28,9 @@ public enum Configuration {
         }
     }
 
-    public nonisolated(unsafe) static var userAgent: String = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
+    public static var userAgent: String = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
 
-    public nonisolated(unsafe) static var tlsConfiguration: TLSConfiguration = {
+    public static var tlsConfiguration: TLSConfiguration = {
         precondition(!deviceIdentifier.isEmpty, "deviceIdentifier must be set")
         #if DEBUG
             var conf = TLSConfiguration.makeClientConfiguration()
@@ -46,16 +46,34 @@ public enum Configuration {
     public static let timeoutRead: Int64 = 30
 
     #if os(macOS)
-        public nonisolated(unsafe) static var homePath: URL = FileManager.default
+        public static var homePath: URL = FileManager.default
             .homeDirectoryForCurrentUser
             .appendingPathComponent(".ipatool", isDirectory: true)
-        { didSet { assert(homePath.isFileURL) } }
+        {
+            didSet { assert(homePath.isFileURL) }
+        }
     #else
-        public nonisolated(unsafe) static var homePath: URL = FileManager.default
+        public static var homePath: URL = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask).first!
             .appendingPathComponent(".ipatool", isDirectory: true)
-        { didSet { assert(homePath.isFileURL) } }
+        {
+            didSet { assert(homePath.isFileURL) }
+        }
     #endif
+
+    public static func storeAPIHost(pod: String?) -> String {
+        guard let pod, !pod.isEmpty else {
+            return "p25-buy.itunes.apple.com"
+        }
+        return "p\(pod)-buy.itunes.apple.com"
+    }
+
+    public static func purchaseAPIHost(pod: String?) -> String {
+        guard let pod, !pod.isEmpty else {
+            return "buy.itunes.apple.com"
+        }
+        return "p\(pod)-buy.itunes.apple.com"
+    }
 
     public static func storeId(for countryCode: String) -> String? {
         storeFrontValues[countryCode]
@@ -74,21 +92,11 @@ public enum Configuration {
     }
 
     public static func saveLoginAccount(_ account: Account, for email: String) {
-        let fileURL = accountPath(for: email)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .prettyPrinted
-        let data = try! encoder.encode(account)
-        try! data.write(to: fileURL)
+        ApplePackage.saveLoginAccount(account, for: email)
     }
 
     public static func withAccount<T>(email: String, _ body: (inout Account) async throws -> T) async throws -> T {
-        var account: Account = try {
-            let fileURL = accountPath(for: email)
-            let data = try Data(contentsOf: fileURL)
-            return try JSONDecoder().decode(Account.self, from: data)
-        }()
-        defer { saveLoginAccount(account, for: email) }
-        return try await body(&account)
+        try await ApplePackage.withAccount(email: email, body)
     }
 }
 

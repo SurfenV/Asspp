@@ -24,7 +24,7 @@ public struct Software: Codable, Equatable, Hashable, Identifiable {
     public var fileSizeBytes: String?
     public var releaseDate: String
     public var releaseNotes: String?
-    public var formattedPrice: String
+    public var formattedPrice: String?
     public var primaryGenreName: String
 
     private enum CodingKeys: String, CodingKey {
@@ -64,7 +64,7 @@ public struct Software: Codable, Equatable, Hashable, Identifiable {
         minimumOsVersion: String,
         fileSizeBytes: String? = nil,
         releaseDate: String,
-        formattedPrice: String,
+        formattedPrice: String? = nil,
         primaryGenreName: String
     ) {
         self.id = id

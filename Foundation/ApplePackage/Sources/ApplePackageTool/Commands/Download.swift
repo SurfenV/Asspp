@@ -15,6 +15,8 @@ struct Download: AsyncParsableCommand {
         abstract: "Download an app"
     )
 
+    @OptionGroup var globalOptions: GlobalOptions
+
     @Argument(help: "Email address")
     var email: String
 
@@ -24,26 +26,50 @@ struct Download: AsyncParsableCommand {
     @Option(help: "Version ID")
     var versionID: String?
 
+    @Option(help: "Platform to download for: iPhone, iPad, or AppleTV (default: iPhone)")
+    var platform: PlatformArgument?
+
     @Option(help: "Output path")
     var output: String
 
     func run() async throws {
+        globalOptions.apply()
+        let outputURL = try validateOutputURL(output)
+        // The redownload fallback endpoint serves AppleTV builds when no
+        // platform-pinned version ID is provided, so always resolve one.
+        let entityType = platform?.entityType ?? .iPhone
+
         try await Configuration.withAccount(email: email) { account in
             try await Authenticator.rotatePasswordToken(for: &account)
             guard let country = Configuration.countryCode(for: account.store) else {
                 throw NSError(domain: "", code: 0, userInfo: [NSLocalizedDescriptionKey: "Unsupported store identifier: \(account.store)"])
             }
-            let app = try await Lookup.lookup(bundleID: bundleID, countryCode: country)
-            let downloadOutput = try await ApplePackage.Download.download(account: &account, app: app, externalVersionID: versionID ?? "")
+            let app = try await Lookup.lookup(bundleID: bundleID, countryCode: country, entityType: entityType)
+            let resolvedVersionID = try await resolveVersionID(
+                requestedVersionID: versionID,
+                app: app,
+                country: country,
+                entityType: entityType
+            )
+            let downloadOutput = try await ApplePackage.Download.download(
+                account: &account,
+                app: app,
+                externalVersionID: resolvedVersionID
+            )
 
-            let url = URL(string: downloadOutput.downloadURL)!
-            let outputURL = URL(fileURLWithPath: output)
+            guard let url = URL(string: downloadOutput.downloadURL) else {
+                throw NSError(domain: "InvalidResponse", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid download URL: \(downloadOutput.downloadURL)"])
+            }
 
             let (contentLength, supportsRanges) = try await getContentInfo(from: url)
             print("downloading \(app.name) (\(app.bundleID)) version \(downloadOutput.bundleShortVersionString)")
             print("content length: \(formatBytes(contentLength))")
 
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(outputURL.lastPathComponent)
+            let tempURL = temporaryDownloadURL(
+                outputURL: outputURL,
+                bundleID: app.bundleID,
+                bundleVersion: downloadOutput.bundleVersion
+            )
 
             var startByte: Int64 = 0
             if FileManager.default.fileExists(atPath: tempURL.path) {
@@ -63,12 +89,15 @@ struct Download: AsyncParsableCommand {
             }
 
             print("writing signature...")
-            try await SignatureInjector.inject(sinfs: downloadOutput.sinfs, into: tempURL.path)
+            try await SignatureInjector.inject(
+                sinfs: downloadOutput.sinfs,
+                iTunesMetadata: downloadOutput.iTunesMetadata,
+                into: tempURL.path
+            )
 
-            if FileManager.default.fileExists(atPath: outputURL.path) {
-                try FileManager.default.removeItem(at: outputURL)
-            }
-            try FileManager.default.moveItem(at: tempURL, to: outputURL)
+            try PackagePlatformValidator.ensurePackage(at: tempURL, supports: entityType)
+
+            try replaceOutput(at: outputURL, with: tempURL)
 
             print("saved to \(outputURL.path)")
         }
@@ -96,46 +125,227 @@ struct Download: AsyncParsableCommand {
             request.setValue("bytes=\(startByte)-", forHTTPHeaderField: "Range")
         }
 
-        let (asyncBytes, response) = try await URLSession.shared.bytes(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              200 ... 299 ~= httpResponse.statusCode || httpResponse.statusCode == 206
-        else {
-            throw NSError(domain: "HTTPError", code: (response as? HTTPURLResponse)?.statusCode ?? 0, userInfo: nil)
+        let downloader = ProgressDownloader(
+            fileURL: fileURL,
+            startByte: startByte,
+            totalSize: totalSize,
+            progressHandler: updateProgress(downloaded:total:)
+        )
+
+        print("", terminator: "")
+        try await downloader.download(request: request)
+        updateProgress(downloaded: totalSize, total: totalSize)
+        print("")
+    }
+
+    private func resolveVersionID(
+        requestedVersionID: String?,
+        app: Software,
+        country: String,
+        entityType: EntityType?
+    ) async throws -> String {
+        if let requestedVersionID, !requestedVersionID.isEmpty {
+            return requestedVersionID
         }
 
-        let fileHandle: FileHandle
+        guard let entityType else {
+            return ""
+        }
+
+        let metadata = try await PlatformVersionLookup.lookup(
+            appID: app.id,
+            countryCode: country,
+            entityType: entityType
+        )
+        return metadata.externalVersionID
+    }
+}
+
+private final class ProgressDownloader: NSObject, URLSessionDataDelegate {
+    private let fileURL: URL
+    private let startByte: Int64
+    private let totalSize: Int64
+    private let progressHandler: (Int64, Int64) -> Void
+
+    private var fileHandle: FileHandle?
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var downloadedBytes: Int64
+    private var lastProgressUpdate = Date()
+
+    init(
+        fileURL: URL,
+        startByte: Int64,
+        totalSize: Int64,
+        progressHandler: @escaping (Int64, Int64) -> Void
+    ) {
+        self.fileURL = fileURL
+        self.startByte = startByte
+        self.totalSize = totalSize
+        self.progressHandler = progressHandler
+        downloadedBytes = startByte
+    }
+
+    func download(request: URLRequest) async throws {
+        try prepareOutputFile()
+
+        let delegateQueue = OperationQueue()
+        delegateQueue.maxConcurrentOperationCount = 1
+
+        let session = URLSession(configuration: .default, delegate: self, delegateQueue: delegateQueue)
+        defer {
+            session.finishTasksAndInvalidate()
+        }
+
+        try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            session.dataTask(with: request).resume()
+        }
+    }
+
+    private func prepareOutputFile() throws {
         if startByte > 0, FileManager.default.fileExists(atPath: fileURL.path) {
             fileHandle = try FileHandle(forWritingTo: fileURL)
-            try fileHandle.seek(toOffset: UInt64(startByte))
+            try fileHandle?.seek(toOffset: UInt64(startByte))
         } else {
             FileManager.default.createFile(atPath: fileURL.path, contents: nil, attributes: nil)
             fileHandle = try FileHandle(forWritingTo: fileURL)
         }
+    }
 
-        defer {
-            try? fileHandle.close()
+    func urlSession(
+        _: URLSession,
+        dataTask _: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let httpResponse = response as? HTTPURLResponse,
+              200 ... 299 ~= httpResponse.statusCode || httpResponse.statusCode == 206
+        else {
+            complete(with: NSError(domain: "HTTPError", code: (response as? HTTPURLResponse)?.statusCode ?? 0, userInfo: nil))
+            completionHandler(.cancel)
+            return
         }
 
-        var downloadedBytes: Int64 = startByte
-        var lastProgressUpdate = Date()
-        let progressUpdateInterval: TimeInterval = 0.5
+        completionHandler(.allow)
+    }
 
-        print("", terminator: "")
-
-        for try await byte in asyncBytes {
-            let data = Data([byte])
-            try fileHandle.write(contentsOf: data)
-            downloadedBytes += 1
+    func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        do {
+            try fileHandle?.write(contentsOf: data)
+            downloadedBytes += Int64(data.count)
 
             let now = Date()
-            if now.timeIntervalSince(lastProgressUpdate) >= progressUpdateInterval {
-                updateProgress(downloaded: downloadedBytes, total: totalSize)
+            if now.timeIntervalSince(lastProgressUpdate) >= 0.5 {
+                progressHandler(downloadedBytes, totalSize)
                 lastProgressUpdate = now
             }
+        } catch {
+            complete(with: error)
+            dataTask.cancel()
+        }
+    }
+
+    func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
+        complete(with: error)
+    }
+
+    private func complete(with error: Error?) {
+        try? fileHandle?.close()
+        fileHandle = nil
+
+        guard let continuation else {
+            return
         }
 
-        updateProgress(downloaded: downloadedBytes, total: totalSize)
-        print("")
+        self.continuation = nil
+        if let error = error {
+            continuation.resume(throwing: error)
+        } else {
+            continuation.resume()
+        }
+    }
+}
+
+private extension Download {
+    private func validateOutputURL(_ output: String) throws -> URL {
+        let outputURL = URL(fileURLWithPath: output).standardizedFileURL
+
+        guard outputURL.pathExtension.caseInsensitiveCompare("ipa") == .orderedSame else {
+            throw NSError(
+                domain: "InvalidOutputPath",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Output path must end with .ipa"]
+            )
+        }
+
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: outputURL.path, isDirectory: &isDirectory),
+           isDirectory.boolValue
+        {
+            throw NSError(
+                domain: "InvalidOutputPath",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Output path must point to an ipa file"]
+            )
+        }
+
+        let parentURL = outputURL.deletingLastPathComponent()
+        guard FileManager.default.fileExists(atPath: parentURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            throw NSError(
+                domain: "InvalidOutputPath",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Output directory does not exist: \(parentURL.path)"]
+            )
+        }
+
+        try verifyWritableDirectory(parentURL)
+
+        return outputURL
+    }
+
+    private func verifyWritableDirectory(_ directoryURL: URL) throws {
+        let probeURL = directoryURL.appendingPathComponent(".applepackage-write-test-\(UUID().uuidString)")
+        do {
+            try Data().write(to: probeURL, options: .withoutOverwriting)
+            try FileManager.default.removeItem(at: probeURL)
+        } catch {
+            try? FileManager.default.removeItem(at: probeURL)
+            throw NSError(
+                domain: "InvalidOutputPath",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Output directory is not writable: \(directoryURL.path)"]
+            )
+        }
+    }
+
+    private func temporaryDownloadURL(outputURL: URL, bundleID: String, bundleVersion: String) -> URL {
+        let parentURL = outputURL.deletingLastPathComponent()
+        let identity = [bundleID, bundleVersion]
+            .map(sanitizedPathComponent)
+            .joined(separator: ".")
+        return parentURL.appendingPathComponent(".\(outputURL.lastPathComponent).\(identity).download")
+    }
+
+    private func sanitizedPathComponent(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
+        let scalars = value.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
+        let result = String(scalars)
+        return result.isEmpty ? "unknown" : result
+    }
+
+    private func replaceOutput(at outputURL: URL, with tempURL: URL) throws {
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            _ = try FileManager.default.replaceItemAt(
+                outputURL,
+                withItemAt: tempURL,
+                backupItemName: nil,
+                options: []
+            )
+        } else {
+            try FileManager.default.moveItem(at: tempURL, to: outputURL)
+        }
     }
 
     private func updateProgress(downloaded: Int64, total: Int64) {

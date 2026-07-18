@@ -30,7 +30,10 @@ class AppPackageArchive: ObservableObject {
 
     @Published var error: String?
     @Published var loading = false
+    @Published var loadingMessage = ""
     @Published var shouldDismiss = false
+
+    private var operationTask: Task<Void, Never>?
 
     init(accountID: String?, region: String, package: AppStore.AppPackage) {
         accountIdentifier = accountID
@@ -62,27 +65,41 @@ class AppPackageArchive: ObservableObject {
         versionItems.removeAll()
     }
 
+    func cancelLoading() {
+        operationTask?.cancel()
+        operationTask = nil
+        loading = false
+        loadingMessage = ""
+    }
+
     func populateVersionIdentifiers(_ completion: (() async -> Void)? = nil) {
         guard let accountIdentifier, !loading else { return }
         let bundleID = package.software.bundleID
         loading = true
+        loadingMessage = "Loading version list…"
         error = nil
 
-        Task.detached {
+        operationTask = Task { [weak self] in
+            guard let self else { return }
             do {
                 let versions = try await AppStore.this.withAccount(id: accountIdentifier) { userAccount in
                     try await VersionFinder.list(account: &userAccount.account, bundleIdentifier: bundleID)
                 }
-                await MainActor.run { self.versionIdentifiers = versions.reversed() }
+                guard !Task.isCancelled else { return }
+                versionIdentifiers = versions.reversed()
+            } catch is CancellationError {
+                return
             } catch {
-                await MainActor.run {
-                    if case .licenseRequired = error as? ApplePackageError {
-                        self.shouldDismiss = true
-                    }
-                    self.error = error.localizedDescription
+                guard !Task.isCancelled else { return }
+                if case .licenseRequired = error as? ApplePackageError {
+                    shouldDismiss = true
                 }
+                self.error = error.localizedDescription
             }
-            await MainActor.run { self.loading = false }
+            guard !Task.isCancelled else { return }
+            loading = false
+            loadingMessage = ""
+            operationTask = nil
             await completion?()
         }
     }
@@ -90,43 +107,62 @@ class AppPackageArchive: ObservableObject {
     func populateNextVersionItems(count: Int = 3) {
         guard let accountIdentifier, !loading, !isVersionItemsFullyLoaded else { return }
         loading = true
+        loadingMessage = "Loading version details…"
         error = nil
 
-        Task.detached {
+        operationTask = Task { [weak self] in
+            guard let self else { return }
             do {
-                for _ in 0 ..< count where await !self.isVersionItemsFullyLoaded {
-                    let nextIdx = await self.versionItems.count
-                    let version = await self.versionIdentifiers[nextIdx]
-                    let app = await self.package.software
+                for _ in 0 ..< count where !isVersionItemsFullyLoaded {
+                    try Task.checkCancellation()
+                    let nextIdx = versionItems.count
+                    let version = versionIdentifiers[nextIdx]
+                    let app = package.software
 
                     let metadata = try await AppStore.this.withAccount(id: accountIdentifier) { userAccount in
                         try await VersionLookup.getVersionMetadata(account: &userAccount.account, app: app, versionID: version)
                     }
-                    await MainActor.run { self.versionItems[version] = metadata }
+                    try Task.checkCancellation()
+                    versionItems[version] = metadata
                 }
+            } catch is CancellationError {
+                return
             } catch {
-                await MainActor.run { self.error = error.localizedDescription }
+                guard !Task.isCancelled else { return }
+                self.error = error.localizedDescription
             }
-            await MainActor.run { self.loading = false }
+            guard !Task.isCancelled else { return }
+            loading = false
+            loadingMessage = ""
+            operationTask = nil
         }
     }
 
     func populateVersionItem(for versionID: String) {
         guard let accountIdentifier, !loading, versionIdentifiers.contains(versionID), versionItems[versionID] == nil else { return }
         loading = true
+        loadingMessage = "Loading version details…"
         error = nil
 
-        Task.detached {
+        operationTask = Task { [weak self] in
+            guard let self else { return }
             do {
-                let app = await self.package.software
+                let app = package.software
                 let metadata = try await AppStore.this.withAccount(id: accountIdentifier) { userAccount in
                     try await VersionLookup.getVersionMetadata(account: &userAccount.account, app: app, versionID: versionID)
                 }
-                await MainActor.run { self.versionItems[versionID] = metadata }
+                guard !Task.isCancelled else { return }
+                versionItems[versionID] = metadata
+            } catch is CancellationError {
+                return
             } catch {
-                await MainActor.run { self.error = error.localizedDescription }
+                guard !Task.isCancelled else { return }
+                self.error = error.localizedDescription
             }
-            await MainActor.run { self.loading = false }
+            guard !Task.isCancelled else { return }
+            loading = false
+            loadingMessage = ""
+            operationTask = nil
         }
     }
 }
@@ -139,7 +175,7 @@ extension AppPackageArchive {
 
     var releaseNotes: String? { package.software.releaseNotes }
 
-    var formattedPrice: String { package.software.formattedPrice }
+    var formattedPrice: String { package.software.formattedPrice ?? "—" }
 
     var price: Double? { package.software.price }
 

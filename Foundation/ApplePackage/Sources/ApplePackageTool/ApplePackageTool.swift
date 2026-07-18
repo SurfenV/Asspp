@@ -9,6 +9,41 @@ import ApplePackage
 import ArgumentParser
 import Foundation
 
+enum PlatformArgument: String, ExpressibleByArgument {
+    case iPhone
+    case iPad
+    case AppleTV
+
+    var entityType: EntityType {
+        switch self {
+        case .iPhone:
+            return .iPhone
+        case .iPad:
+            return .iPad
+        case .AppleTV:
+            return .appleTV
+        }
+    }
+}
+
+struct GlobalOptions: ParsableArguments {
+    @Option(name: .long, help: "Custom device GUID (default: system MAC address)")
+    var guid: String?
+
+    @Flag(name: .shortAndLong, help: "Enable verbose logging of requests and responses")
+    var verbose: Bool = false
+
+    func apply() {
+        if let guid = guid {
+            Configuration.deviceIdentifier = guid
+        }
+        if verbose {
+            APLogger.verbose = true
+            APLogger.logger.logLevel = .debug
+        }
+    }
+}
+
 @main
 struct ApplePackageTool: AsyncParsableCommand {
     static let configuration = CommandConfiguration(

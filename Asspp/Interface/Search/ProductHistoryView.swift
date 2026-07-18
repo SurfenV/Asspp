@@ -10,7 +10,7 @@ import SwiftUI
 
 struct ProductHistoryView: View {
     @StateObject var vm: AppPackageArchive
-    @State var showErrorAlert = false
+    @State private var showErrorAlert = false
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
@@ -53,19 +53,28 @@ struct ProductHistoryView: View {
                 Rectangle()
                     .foregroundStyle(.clear)
                     .background(.ultraThinMaterial)
-                ProgressView()
-                    .progressViewStyle(.circular)
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                    Text(vm.loadingMessage)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    Button("Cancel") {
+                        vm.cancelLoading()
+                    }
+                }
             }
             .opacity(vm.loading ? 1 : 0)
             .animation(.default, value: vm.loading)
-            .ignoresSafeArea()
+            .allowsHitTesting(vm.loading)
+            .ignoresSafeArea(edges: [.vertical])
         }
         .animation(.default, value: vm.versionIdentifiers)
         .animation(.default, value: vm.versionItems)
         .animation(.default, value: vm.loading)
         .navigationTitle("Version History")
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .navigationBarTrailing) {
                 if vm.loading {
                     ProgressView()
                 } else {
@@ -97,17 +106,24 @@ struct ProductHistoryView: View {
                 title: Text("Oops"),
                 message: Text(vm.error ?? String(localized: "Unknown Error")),
                 dismissButton: .default(Text("OK"), action: {
+                    vm.error = nil
                     if vm.shouldDismiss {
                         dismiss()
                     }
                 })
             )
         }
+        .onChange(of: vm.error) { newValue in
+            showErrorAlert = newValue != nil
+        }
         .onAppear {
             guard vm.versionItems.isEmpty else { return }
             vm.populateVersionIdentifiers {
                 await MainActor.run { vm.populateNextVersionItems() }
             }
+        }
+        .onDisappear {
+            vm.cancelLoading()
         }
     }
 }

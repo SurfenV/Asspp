@@ -14,23 +14,13 @@ public enum Searcher {
         var results: [Software]
     }
 
-    public nonisolated static func search(
+    public static func search(
         term: String,
         countryCode: String,
         limit: Int = 5,
         entityType: EntityType = .iPhone
     ) async throws -> [Software] {
-        let client = HTTPClient(
-            eventLoopGroupProvider: .singleton,
-            configuration: .init(
-                tlsConfiguration: Configuration.tlsConfiguration,
-                redirectConfiguration: .follow(max: 8, allowCycles: false),
-                timeout: .init(
-                    connect: .seconds(Configuration.timeoutConnect),
-                    read: .seconds(Configuration.timeoutRead)
-                ),
-            ).then { $0.httpVersion = .http1Only }
-        )
+        let client = Configuration.makeHTTPClient(redirectConfiguration: .follow(max: 8, allowCycles: false))
         defer { _ = client.shutdown() }
 
         let request = try makeRequest(
@@ -53,7 +43,7 @@ public enum Searcher {
         return searchResponse.results
     }
 
-    private nonisolated static func makeRequest(
+    private static func makeRequest(
         term: String,
         countryCode: String,
         limit: Int,
@@ -73,7 +63,7 @@ public enum Searcher {
         )
     }
 
-    private nonisolated static func createSearchURL(
+    private static func createSearchURL(
         term: String,
         countryCode: String,
         limit: Int,
@@ -84,7 +74,7 @@ public enum Searcher {
         comps.host = "itunes.apple.com"
         comps.path = "/search"
         comps.queryItems = [
-            URLQueryItem(name: "entity", value: entityType.entityValue),
+            URLQueryItem(name: "entity", value: entityType.searchEntityValue),
             URLQueryItem(name: "limit", value: "\(limit)"),
             URLQueryItem(name: "media", value: "software"),
             URLQueryItem(name: "term", value: term),

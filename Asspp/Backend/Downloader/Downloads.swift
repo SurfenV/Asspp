@@ -132,7 +132,11 @@ class Downloads: NSObject, ObservableObject {
         defer { try? FileManager.default.removeItem(at: tempFile) }
 
         logger.info("injecting signatures:\(manifest.id)")
-        try await SignatureInjector.inject(sinfs: manifest.signatures, into: tempFile.path)
+        try await SignatureInjector.inject(
+            sinfs: manifest.signatures,
+            iTunesMetadata: manifest.iTunesMetadata,
+            into: tempFile.path
+        )
 
         logger.info("moving finalized file: \(manifest.id)")
         try FileManager.default.moveItem(at: tempFile, to: manifest.targetLocation)

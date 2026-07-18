@@ -9,20 +9,22 @@ import AsyncHTTPClient
 import Foundation
 
 public enum Purchase {
-    public nonisolated static func purchase(
+    public static func purchase(
         account: inout Account,
         app: Software
     ) async throws {
         let deviceIdentifier = Configuration.deviceIdentifier
 
         if (app.price ?? 0) > 0 {
-            try ensureFailed("purchasing paid apps is not supported")
+            try ensureFailed(Strings.paidAppsNotSupported)
         }
 
         do {
             try await purchaseWithParams(account: &account, app: app, guid: deviceIdentifier, pricingParameters: "STDQ")
         } catch let error as NSError {
-            if error.localizedDescription.contains("item is temporarily unavailable") {
+            if error.localizedDescription.contains("failureType: 2059") ||
+                error.localizedDescription.contains(Strings.itemTemporarilyUnavailable)
+            {
                 try await purchaseWithParams(account: &account, app: app, guid: deviceIdentifier, pricingParameters: "GAME")
             } else {
                 throw error
@@ -30,23 +32,15 @@ public enum Purchase {
         }
     }
 
-    private nonisolated static func purchaseWithParams(
+    private static func purchaseWithParams(
         account: inout Account,
         app: Software,
         guid: String,
         pricingParameters: String
     ) async throws {
-        let client = HTTPClient(
-            eventLoopGroupProvider: .singleton,
-            configuration: .init(
-                tlsConfiguration: Configuration.tlsConfiguration,
-                redirectConfiguration: .disallow,
-                timeout: .init(
-                    connect: .seconds(Configuration.timeoutConnect),
-                    read: .seconds(Configuration.timeoutRead)
-                ),
-            ).then { $0.httpVersion = .http1Only }
-        )
+        APLogger.debug("purchase: using pricing parameters: \(pricingParameters)")
+
+        let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
         defer { _ = client.shutdown() }
 
         let request = try makeRequest(
@@ -57,14 +51,20 @@ public enum Purchase {
         )
         let response = try await client.execute(request: request).get()
 
+        APLogger.logResponse(
+            status: response.status.code,
+            headers: response.headers.map { ($0.name, $0.value) },
+            bodySize: response.body?.readableBytes
+        )
+
         account.cookie.mergeCookies(response.cookies)
 
-        try ensure(response.status == .ok, "purchase request failed with status \(response.status.code)")
+        try ensure(response.status == .ok, Strings.requestFailed(status: response.status.code))
 
         guard var body = response.body,
               let data = body.readData(length: body.readableBytes)
         else {
-            try ensureFailed("response body is empty")
+            try ensureFailed(Strings.responseBodyEmpty)
         }
 
         let plist = try PropertyListSerialization.propertyList(
@@ -72,35 +72,44 @@ public enum Purchase {
             options: [],
             format: nil
         ) as? [String: Any]
-        guard let dict = plist else { try ensureFailed("invalid response") }
+        guard let dict = plist else { try ensureFailed(Strings.invalidResponse) }
+
+        // Check if Apple requires the user to accept terms in a browser
+        if let action = dict["action"] as? [String: Any],
+           let urlString = (action["url"] as? String) ?? (action["URL"] as? String),
+           urlString.hasSuffix("termsPage")
+        {
+            try ensureFailed(Strings.termsAcceptanceRequired(url: urlString))
+        }
 
         if let failureType = dict["failureType"] as? String {
+            let customerMessage = dict["customerMessage"] as? String
             switch failureType {
-            case "2059":
-                try ensureFailed("item is temporarily unavailable")
-            case "2034":
-                try ensureFailed("password token is expired")
+            case "2034", "2042":
+                try ensureFailed(Strings.purchaseFailureMessage(failureType: failureType, customerMessage: customerMessage))
             default:
-                if let customerMessage = dict["customerMessage"] as? String {
-                    if customerMessage == "Subscription Required" {
-                        try ensureFailed("subscription required")
-                    }
-                    try ensureFailed(customerMessage)
+                if customerMessage == Strings.passwordChanged {
+                    try ensureFailed(Strings.passwordTokenExpired)
                 }
-                try ensureFailed("purchase failed: \(failureType)")
+                if let customerMessage = customerMessage {
+                    if customerMessage == "Subscription Required" {
+                        try ensureFailed(Strings.subscriptionRequired)
+                    }
+                }
+                try ensureFailed(Strings.purchaseFailureMessage(failureType: failureType, customerMessage: customerMessage))
             }
         }
 
         if let jingleDocType = dict["jingleDocType"] as? String,
            let status = dict["status"] as? Int
         {
-            try ensure(jingleDocType == "purchaseSuccess" && status == 0, "failed to purchase app")
+            try ensure(jingleDocType == "purchaseSuccess" && status == 0, Strings.failedToPurchase)
         } else {
-            try ensureFailed("invalid purchase response")
+            try ensureFailed(Strings.invalidPurchaseResponse)
         }
     }
 
-    private nonisolated static func makeRequest(
+    private static func makeRequest(
         account: Account,
         app: Software,
         guid: String,
@@ -132,12 +141,17 @@ public enum Purchase {
             ("X-Token", account.passwordToken),
         ]
 
-        for item in account.cookie.buildCookieHeader(URL(string: "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/buyProduct")!) {
+        let host = Configuration.purchaseAPIHost(pod: account.pod)
+        let urlString = "https://\(host)/WebObjects/MZFinance.woa/wa/buyProduct"
+
+        for item in account.cookie.buildCookieHeader(URL(string: urlString)!) {
             headers.append(item)
         }
 
+        APLogger.logRequest(method: "POST", url: urlString, headers: headers)
+
         return try .init(
-            url: "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/buyProduct",
+            url: urlString,
             method: .POST,
             headers: .init(headers),
             body: .data(data)
