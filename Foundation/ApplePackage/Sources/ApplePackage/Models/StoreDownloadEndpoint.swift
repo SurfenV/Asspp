@@ -18,6 +18,13 @@ enum StoreDownloadEndpoint {
     /// with the `redownload` endpoint.
     static let retryableFailureType = "5002"
 
+    var diagnosticName: String {
+        switch self {
+        case .volumeStore: return "volumeStore"
+        case .redownload: return "redownload"
+        }
+    }
+
     /// The two endpoints name the external version ID differently in the payload.
     var externalVersionIDKey: String {
         switch self {

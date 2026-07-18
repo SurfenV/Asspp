@@ -62,6 +62,18 @@ struct SettingView: View {
                 #endif
 
                 Section {
+                    NavigationLink {
+                        LogView()
+                    } label: {
+                        Label("Diagnostic Logs", systemImage: "doc.text.magnifyingglass")
+                    }
+                } header: {
+                    Text("Diagnostics")
+                } footer: {
+                    Text("View, copy, or export logs for troubleshooting version history.")
+                }
+
+                Section {
                     Button("@Lakr233") {
                         UIApplication.shared.open(URL(string: "https://twitter.com/Lakr233")!)
                     }

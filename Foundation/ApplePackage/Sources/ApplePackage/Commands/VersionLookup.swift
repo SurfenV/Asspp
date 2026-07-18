@@ -14,6 +14,8 @@ public enum VersionLookup {
         app: Software,
         versionID: String
     ) async throws -> VersionMetadata {
+        let startedAt = Date()
+        APLogger.info("versions: metadata start appID=\(app.id) versionID=\(versionID) pod=\(account.pod ?? "missing")")
         let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
         defer { _ = client.shutdown() }
 
@@ -44,6 +46,11 @@ public enum VersionLookup {
             try ensureFailed(Strings.missingOrInvalidReleaseDate)
         }
 
+        APLogger.info("versions: metadata parsed versionID=\(versionID) displayVersion=\(bundleShortVersionString) elapsed=\(elapsed(since: startedAt))s")
         return VersionMetadata(displayVersion: bundleShortVersionString, releaseDate: releaseDate)
+    }
+
+    private static func elapsed(since date: Date) -> String {
+        String(format: "%.2f", Date().timeIntervalSince(date))
     }
 }

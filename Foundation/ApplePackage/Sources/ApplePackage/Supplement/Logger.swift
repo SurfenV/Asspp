@@ -33,12 +33,9 @@ public enum APLogger {
 
     static func logRequest(method: String, url: String, headers: [(String, String)] = []) {
         guard verbose else { return }
-        var msg = ">>> \(method) \(url)"
+        var msg = ">>> \(method) \(sanitizedURL(url))"
         for (name, value) in headers {
-            let safeValue = name.lowercased().contains("token") || name.lowercased().contains("password")
-                ? "<redacted>"
-                : value
-            msg += "\n    \(name): \(safeValue)"
+            msg += "\n    \(name): \(sanitizedHeaderValue(name: name, value: value))"
         }
         debug(msg)
     }
@@ -50,8 +47,37 @@ public enum APLogger {
             msg += " (\(bodySize) bytes)"
         }
         for (name, value) in headers {
-            msg += "\n    \(name): \(value)"
+            msg += "\n    \(name): \(sanitizedHeaderValue(name: name, value: value))"
         }
         debug(msg)
+    }
+
+    private static func sanitizedHeaderValue(name: String, value: String) -> String {
+        let sensitiveNames = [
+            "authorization", "cookie", "dsid", "guid", "password", "token",
+        ]
+        let loweredName = name.lowercased()
+        if sensitiveNames.contains(where: loweredName.contains) {
+            return "<redacted>"
+        }
+        if loweredName == "location" {
+            return sanitizedURL(value)
+        }
+        return value
+    }
+
+    private static func sanitizedURL(_ value: String) -> String {
+        guard var components = URLComponents(string: value),
+              let queryItems = components.queryItems
+        else {
+            return value
+        }
+        let sensitiveNames = ["dsid", "guid", "password", "token"]
+        components.queryItems = queryItems.map { item in
+            let loweredName = item.name.lowercased()
+            guard sensitiveNames.contains(where: loweredName.contains) else { return item }
+            return URLQueryItem(name: item.name, value: "<redacted>")
+        }
+        return components.string ?? "<url-redacted>"
     }
 }

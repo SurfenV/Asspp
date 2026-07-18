@@ -19,6 +19,8 @@ extension StoreDownloadEndpoint {
         deviceIdentifier: String,
         externalVersionID: String
     ) async throws -> [String: Any] {
+        let startedAt = Date()
+        APLogger.info("store: product request start endpoint=volumeStore versionID=\(externalVersionID.isEmpty ? "latest" : externalVersionID)")
         var dict = try await StoreDownloadEndpoint.volumeStore.fetchProduct(
             client: client,
             account: &account,
@@ -28,7 +30,7 @@ extension StoreDownloadEndpoint {
         )
 
         if dict["failureType"] as? String == retryableFailureType {
-            APLogger.debug("store: volumeStore rejected with 5002, retrying via redownload endpoint")
+            APLogger.info("store: volumeStore returned failureType=5002; starting redownload fallback")
             dict = try await StoreDownloadEndpoint.redownload.fetchProduct(
                 client: client,
                 account: &account,
@@ -38,6 +40,7 @@ extension StoreDownloadEndpoint {
             )
         }
 
+        APLogger.info("store: product request completed elapsed=\(elapsed(since: startedAt))s failureType=\(dict["failureType"] as? String ?? "none")")
         return dict
     }
 
@@ -55,7 +58,11 @@ extension StoreDownloadEndpoint {
         var finalResponse: HTTPClient.Response?
         let maxRedirects = 3
 
+        APLogger.info("store: endpoint=\(diagnosticName) begin host=\(currentURL.host ?? "unknown") pod=\(account.pod ?? "missing")")
+
         while redirectAttempt <= maxRedirects {
+            let attemptStartedAt = Date()
+            APLogger.info("store: endpoint=\(diagnosticName) attempt=\(redirectAttempt + 1) host=\(currentURL.host ?? "unknown")")
             let request = try makeRequest(
                 account: account,
                 app: app,
@@ -63,8 +70,16 @@ extension StoreDownloadEndpoint {
                 guid: deviceIdentifier,
                 externalVersionID: externalVersionID
             )
-            let response = try await client.execute(request: request).get()
+            let response: HTTPClient.Response
+            do {
+                response = try await client.execute(request: request).get()
+            } catch {
+                APLogger.error("store: endpoint=\(diagnosticName) transport failed attempt=\(redirectAttempt + 1) elapsed=\(Self.elapsed(since: attemptStartedAt))s type=\(String(reflecting: type(of: error))) error=\(error.localizedDescription)")
+                throw error
+            }
             defer { finalResponse = response }
+
+            APLogger.info("store: endpoint=\(diagnosticName) response attempt=\(redirectAttempt + 1) status=\(response.status.code) bytes=\(response.body?.readableBytes ?? 0) elapsed=\(Self.elapsed(since: attemptStartedAt))s")
 
             APLogger.logResponse(
                 status: response.status.code,
@@ -81,6 +96,7 @@ extension StoreDownloadEndpoint {
                 else {
                     try ensureFailed(Strings.failedToRetrieveRedirect)
                 }
+                APLogger.info("store: endpoint=\(diagnosticName) redirect attempt=\(redirectAttempt + 1) nextHost=\(newURL.host ?? "unknown") learnedPod=\(account.pod ?? "missing")")
                 currentURL = newURL
                 redirectAttempt += 1
                 continue
@@ -90,6 +106,7 @@ extension StoreDownloadEndpoint {
 
         guard let finalResponse else { try ensureFailed(Strings.noResponseReceived) }
 
+        APLogger.info("store: endpoint=\(diagnosticName) final status=\(finalResponse.status.code) redirects=\(redirectAttempt)")
         try ensure(finalResponse.status == .ok, Strings.requestFailed(status: finalResponse.status.code))
 
         guard var body = finalResponse.body,
@@ -105,6 +122,7 @@ extension StoreDownloadEndpoint {
         ) as? [String: Any]
         guard let dict = plist else { try ensureFailed(Strings.invalidResponse) }
 
+        APLogger.info("store: endpoint=\(diagnosticName) plist parsed songListCount=\((dict["songList"] as? [[String: Any]])?.count ?? 0) failureType=\(dict["failureType"] as? String ?? "none")")
         return dict
     }
 
@@ -186,5 +204,9 @@ extension StoreDownloadEndpoint {
             headers: .init(headers),
             body: .data(data)
         )
+    }
+
+    private static func elapsed(since date: Date) -> String {
+        String(format: "%.2f", Date().timeIntervalSince(date))
     }
 }

@@ -15,10 +15,13 @@ public enum VersionFinder {
         entityType: EntityType? = nil,
         externalVersionID: String? = nil
     ) async throws -> [String] {
+        let startedAt = Date()
+        APLogger.info("versions: list start bundle=\(bundleIdentifier) store=\(account.store) pod=\(account.pod ?? "missing")")
         guard let countryCode = Configuration.countryCode(for: account.store) else {
             try ensureFailed(Strings.unsupportedStoreIdentifier(account.store))
         }
         let app = try await Lookup.lookup(bundleID: bundleIdentifier, countryCode: countryCode, entityType: entityType)
+        APLogger.info("versions: lookup resolved appID=\(app.id) country=\(countryCode) elapsed=\(elapsed(since: startedAt))s")
         let resolvedExternalVersionID: String
         if let externalVersionID {
             resolvedExternalVersionID = externalVersionID
@@ -76,6 +79,11 @@ public enum VersionFinder {
         let result = identifiers.map { "\($0)" }
         try ensure(!result.isEmpty, Strings.noVersionsFound)
 
+        APLogger.info("versions: list parsed count=\(result.count) elapsed=\(elapsed(since: startedAt))s")
         return result
+    }
+
+    private static func elapsed(since date: Date) -> String {
+        String(format: "%.2f", Date().timeIntervalSince(date))
     }
 }

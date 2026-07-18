@@ -11,10 +11,16 @@ import Logging
 import SwiftUI
 
 let logger = {
+    LoggingSystem.bootstrap { LogManagerHandler(label: $0) }
     var logger = Logger(label: "wiki.qaq.asspp")
     logger.logLevel = .debug
     return logger
 }()
+
+APLogger.verbose = true
+var applePackageLogger = Logger(label: "wiki.qaq.asspp.applepackage")
+applePackageLogger.logLevel = .debug
+APLogger.logger = applePackageLogger
 
 let version = [
     Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
@@ -79,7 +85,7 @@ do {
         }
     }
     let identifier = UserDefaults.standard.string(forKey: deviceIdentifierKey)!
-    logger.info("using device identifier: \(identifier)")
+    logger.info("device identifier configured (value redacted)")
     ApplePackage.Configuration.deviceIdentifier = identifier
 }
 

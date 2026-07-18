@@ -117,12 +117,14 @@ struct ProductHistoryView: View {
             showErrorAlert = newValue != nil
         }
         .onAppear {
+            logger.info("[history-ui] appeared bundle=\(vm.package.software.bundleID) cachedIDs=\(vm.versionIdentifiers.count) cachedMetadata=\(vm.versionItems.count)")
             guard vm.versionItems.isEmpty else { return }
             vm.populateVersionIdentifiers {
                 await MainActor.run { vm.populateNextVersionItems() }
             }
         }
         .onDisappear {
+            logger.info("[history-ui] disappeared bundle=\(vm.package.software.bundleID)")
             vm.cancelLoading()
         }
     }
