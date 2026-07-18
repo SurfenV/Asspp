@@ -97,7 +97,7 @@ class AppPackageArchive: ObservableObject {
             do {
                 let versions = try await AppStore.this.withAccount(id: accountIdentifier) { userAccount in
                     logger.info("[history:\(operationID)] account loaded store=\(userAccount.account.store) pod=\(userAccount.account.pod ?? "missing")")
-                    try await VersionFinder.list(account: &userAccount.account, bundleIdentifier: bundleID)
+                    return try await VersionFinder.list(account: &userAccount.account, bundleIdentifier: bundleID)
                 }
                 guard !Task.isCancelled else {
                     logger.info("[history:\(operationID)] version-list result discarded after cancellation elapsed=\(Self.elapsed(since: startedAt))s")

@@ -40,32 +40,31 @@ struct LogView: View {
         }
         .navigationTitle("Diagnostic Logs")
         .toolbar {
-            if unlocked {
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    Button {
-                        refresh()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    Button {
-                        UIPasteboard.general.string = LogManager.shared.text()
-                        showCopiedAlert = true
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                    }
-                    Button {
-                        showShareSheet = true
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    Button(role: .destructive) {
-                        LogManager.shared.clear()
-                        refresh()
-                    } label: {
-                        Image(systemName: "trash")
-                    }
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button {
+                    refresh()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                Button {
+                    UIPasteboard.general.string = LogManager.shared.text()
+                    showCopiedAlert = true
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                Button {
+                    showShareSheet = true
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                Button(role: .destructive) {
+                    LogManager.shared.clear()
+                    refresh()
+                } label: {
+                    Image(systemName: "trash")
                 }
             }
+            .disabled(!unlocked)
         }
         .sheet(isPresented: $showShareSheet) {
             ActivityView(activityItems: [LogManager.shared.exportURL()])
