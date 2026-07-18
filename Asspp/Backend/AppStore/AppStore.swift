@@ -52,15 +52,22 @@ class AppStore: ObservableObject {
     }
 
     func withAccount<T>(id: String, _ body: (inout UserAccount) async throws -> T) async throws -> T {
+        logger.info("[account-transaction] resolving account")
         guard var account = await accounts.first(where: { $0.id == id }) else {
+            logger.error("[account-transaction] account not found")
             throw AuthenticationError.accountNotFound
         }
+        logger.info("[account-transaction] body begin store=\(account.account.store) pod=\(account.account.pod ?? "missing")")
         let result = try await body(&account)
+        logger.info("[account-transaction] body returned; scheduling account write-back")
         let updatedAccount = account
         await MainActor.run {
+            logger.info("[account-transaction] main-actor write-back begin")
             guard let idx = accounts.firstIndex(where: { $0.id == id }) else { return }
             accounts[idx] = updatedAccount
+            logger.info("[account-transaction] main-actor write-back completed")
         }
+        logger.info("[account-transaction] completed")
         return result
     }
 }

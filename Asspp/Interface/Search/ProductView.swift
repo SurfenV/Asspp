@@ -37,6 +37,7 @@ struct ProductView: View {
     @State var licenseHint: String = ""
     @State var acquiringLicense = false
     @State var showLicenseAlert = false
+    @State var showRegionAccountAlert = false
     @State var hint: String = ""
     @State var hintColor: Color?
 
@@ -96,21 +97,30 @@ struct ProductView: View {
     var packageHeader: some View {
         Section {
             PackageDisplayView(archive: archive.package)
-            NavigationLink {
-                // NavigationLink eagerly builds its destination on iOS 15.
-                // Defer the synchronous cache reads until navigation actually occurs.
-                LazyView(ProductHistoryView(vm: AppPackageArchive(accountID: selection, region: region, package: archive.package)))
-            } label: {
-                let badgeText = archive.releaseDate.flatMap { date in
-                    Text(date.formatted(.relative(presentation: .numeric)))
+            if let account {
+                NavigationLink {
+                    // NavigationLink eagerly builds its destination on iOS 15.
+                    // Defer the synchronous cache reads until navigation actually occurs.
+                    LazyView(ProductHistoryView(vm: AppPackageArchive(accountID: account.id, region: region, package: archive.package)))
+                } label: {
+                    versionHistoryLabel
                 }
-
-                Text("Version \(archive.package.software.version)")
-                    .badge(badgeText)
+                .simultaneousGesture(TapGesture().onEnded {
+                    logger.info("[history-ui] navigation tapped bundle=\(archive.package.software.bundleID) region=\(region) account=available")
+                })
+            } else {
+                Button {
+                    logger.warning("[history-ui] navigation rejected: no account for region=\(region)")
+                    showRegionAccountAlert = true
+                } label: {
+                    versionHistoryLabel
+                }
+                .alert("Account Required", isPresented: $showRegionAccountAlert) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text("Add an App Store account for the \(region) region, or search in a region matching one of your accounts.")
+                }
             }
-            .simultaneousGesture(TapGesture().onEnded {
-                logger.info("[history-ui] navigation tapped bundle=\(archive.package.software.bundleID) region=\(region) account=\(account == nil ? "missing" : "available")")
-            })
 
             if let formattedSize {
                 Text("Size")
@@ -122,6 +132,14 @@ struct ProductView: View {
         } header: {
             Text("Package")
         }
+    }
+
+    var versionHistoryLabel: some View {
+        let badgeText = archive.releaseDate.flatMap { date in
+            Text(date.formatted(.relative(presentation: .numeric)))
+        }
+        return Text("Version \(archive.package.software.version)")
+            .badge(badgeText)
     }
 
     var packageDescription: some View {

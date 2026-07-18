@@ -16,7 +16,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", .upToNextMajor(from: "0.9.0")),
-        .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.9.0"),
+        .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.30.3"),
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.2.1"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),

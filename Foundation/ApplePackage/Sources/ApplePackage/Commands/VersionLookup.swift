@@ -17,7 +17,19 @@ public enum VersionLookup {
         let startedAt = Date()
         APLogger.info("versions: metadata start appID=\(app.id) versionID=\(versionID) pod=\(account.pod ?? "missing")")
         let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
-        defer { _ = client.shutdown() }
+        defer {
+            APLogger.info("versions: metadata client shutdown begin versionID=\(versionID)")
+            let shutdownFuture = client.shutdown()
+            APLogger.info("versions: metadata client shutdown scheduled versionID=\(versionID)")
+            shutdownFuture.whenComplete { result in
+                switch result {
+                case .success:
+                    APLogger.info("versions: metadata client shutdown completed versionID=\(versionID)")
+                case let .failure(error):
+                    APLogger.error("versions: metadata client shutdown failed versionID=\(versionID) type=\(String(reflecting: type(of: error))) error=\(error.localizedDescription)")
+                }
+            }
+        }
 
         let dict = try await StoreDownloadEndpoint.fetchProductWithFallback(
             client: client,

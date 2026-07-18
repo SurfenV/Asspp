@@ -37,7 +37,19 @@ public enum VersionFinder {
         }
 
         let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
-        defer { _ = client.shutdown() }
+        defer {
+            APLogger.info("versions: client shutdown begin")
+            let shutdownFuture = client.shutdown()
+            APLogger.info("versions: client shutdown scheduled")
+            shutdownFuture.whenComplete { result in
+                switch result {
+                case .success:
+                    APLogger.info("versions: client shutdown completed")
+                case let .failure(error):
+                    APLogger.error("versions: client shutdown failed type=\(String(reflecting: type(of: error))) error=\(error.localizedDescription)")
+                }
+            }
+        }
 
         let dict = try await StoreDownloadEndpoint.fetchProductWithFallback(
             client: client,

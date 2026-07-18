@@ -36,8 +36,9 @@ class AppPackageArchive: ObservableObject {
     private var operationTask: Task<Void, Never>?
 
     init(accountID: String?, region: String, package: AppStore.AppPackage) {
-        logger.info("[history-init] begin bundle=\(package.software.bundleID) region=\(region) account=\(accountID == nil ? "missing" : "available")")
-        accountIdentifier = accountID
+        let normalizedAccountID = accountID.flatMap { $0.isEmpty ? nil : $0 }
+        logger.info("[history-init] begin bundle=\(package.software.bundleID) region=\(region) account=\(normalizedAccountID == nil ? "missing" : "available")")
+        accountIdentifier = normalizedAccountID
         self.region = region
         _package = .init(initialValue: package)
 
@@ -79,8 +80,9 @@ class AppPackageArchive: ObservableObject {
     }
 
     func populateVersionIdentifiers(_ completion: (() async -> Void)? = nil) {
-        guard let accountIdentifier else {
+        guard let accountIdentifier, !accountIdentifier.isEmpty else {
             logger.error("[history] version-list rejected: no account bundle=\(package.software.bundleID)")
+            error = "No App Store account is available for the \(region) region."
             return
         }
         guard !loading else {
@@ -97,16 +99,30 @@ class AppPackageArchive: ObservableObject {
 
         operationTask = Task { [weak self] in
             guard let self else { return }
+            let watchdog = Task.detached(priority: .utility) {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled else { return }
+                logger.warning("[history:\(operationID)] watchdog: operation still pending after 5s")
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                guard !Task.isCancelled else { return }
+                logger.warning("[history:\(operationID)] watchdog: operation still pending after 15s")
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                guard !Task.isCancelled else { return }
+                logger.warning("[history:\(operationID)] watchdog: operation still pending after 30s")
+            }
+            defer { watchdog.cancel() }
             do {
                 let versions = try await AppStore.this.withAccount(id: accountIdentifier) { userAccount in
                     logger.info("[history:\(operationID)] account loaded store=\(userAccount.account.store) pod=\(userAccount.account.pod ?? "missing")")
                     return try await VersionFinder.list(account: &userAccount.account, bundleIdentifier: bundleID)
                 }
+                logger.info("[history:\(operationID)] account transaction returned count=\(versions.count); applying IDs")
                 guard !Task.isCancelled else {
                     logger.info("[history:\(operationID)] version-list result discarded after cancellation elapsed=\(Self.elapsed(since: startedAt))s")
                     return
                 }
-                versionIdentifiers = versions.reversed()
+                versionIdentifiers = Array(versions.reversed())
+                logger.info("[history:\(operationID)] version IDs applied count=\(versionIdentifiers.count)")
                 logger.info("[history:\(operationID)] version-list success count=\(versions.count) elapsed=\(Self.elapsed(since: startedAt))s")
             } catch is CancellationError {
                 logger.info("[history:\(operationID)] version-list cancelled elapsed=\(Self.elapsed(since: startedAt))s")

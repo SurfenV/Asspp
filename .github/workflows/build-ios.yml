@@ -26,6 +26,8 @@ jobs:
         with:
           path: build/DerivedDataApp
           key: asspp-ios-derived-v1-${{ runner.os }}-xcode26-${{ hashFiles('Asspp.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            asspp-ios-derived-v1-${{ runner.os }}-xcode26-
 
       - name: Build
         run: |

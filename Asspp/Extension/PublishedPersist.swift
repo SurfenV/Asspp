@@ -38,7 +38,7 @@ class FileStorage: PersistProvider {
     }
 
     func set(_ data: Data?, forKey key: String) {
-        try? data?.write(to: pathForKey(key))
+        try? data?.write(to: pathForKey(key), options: .atomic)
     }
 }
 
@@ -74,19 +74,24 @@ struct Persist<Value: Codable> {
 
     init(key: String, defaultValue: Value, engine: PersistProvider) {
         self.engine = engine
-        if let data = engine.data(forKey: key),
-           let object = try? valueDecoder.decode(Value.self, from: data)
-        {
-            subject = CurrentValueSubject<Value, Never>(object)
+        if let data = engine.data(forKey: key) {
+            if let object = try? valueDecoder.decode(Value.self, from: data) {
+                subject = CurrentValueSubject<Value, Never>(object)
+            } else {
+                engine.set(data, forKey: key + ".corrupt")
+                logger.error("failed to decode persisted value for \(key); backed up to \(key).corrupt")
+                subject = CurrentValueSubject<Value, Never>(defaultValue)
+            }
         } else {
             subject = CurrentValueSubject<Value, Never>(defaultValue)
         }
 
+        let persistQueue = DispatchQueue(label: "wiki.qaq.persist.\(key)")
         var cancellables: Set<AnyCancellable> = .init()
         subject
-            .receive(on: DispatchQueue.global())
             .map { try? valueEncoder.encode($0) }
             .removeDuplicates()
+            .receive(on: persistQueue)
             .sink { engine.set($0, forKey: key) }
             .store(in: &cancellables)
         self.cancellables = cancellables

@@ -10,8 +10,15 @@ import Foundation
 import Logging
 
 extension AppStore {
-    enum AuthenticationError: Error {
+    enum AuthenticationError: LocalizedError {
         case accountNotFound
+
+        var errorDescription: String? {
+            switch self {
+            case .accountNotFound:
+                return "No matching App Store account was found. Select or add an account for the search region."
+            }
+        }
     }
 
     @MainActor
