@@ -21,10 +21,11 @@ jobs:
       - name: Ensure iOS platform is installed
         run: xcodebuild -downloadPlatform iOS
 
-      - name: Install Procursus
-        uses: dhinakg/procursus-action@main
+      - name: Restore Xcode build cache
+        uses: actions/cache@v4
         with:
-          packages: ldid findutils sed coreutils make
+          path: build/DerivedDataApp
+          key: asspp-ios-derived-v1-${{ runner.os }}-xcode26-${{ hashFiles('Asspp.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
 
       - name: Build
         run: |

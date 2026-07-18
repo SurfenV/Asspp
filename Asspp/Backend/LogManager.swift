@@ -42,14 +42,19 @@ final class LogManager: @unchecked Sendable {
     }
 
     func write(_ content: String) {
-        queue.async { [self] in
+        // Diagnostics must survive a main-thread hang followed by force quit.
+        // Write synchronously and ask the filesystem to flush every record.
+        queue.sync { [self] in
             let timestamp = ISO8601DateFormatter().string(from: Date())
             let flattened = sanitize(content.replacingOccurrences(of: "\n", with: " | "))
-            messages.append("\(timestamp) \(flattened)")
+            let entry = "\(timestamp) \(flattened)"
+            messages.append(entry)
             if messages.count > Self.maximumMessages {
                 messages.removeFirst(messages.count - Self.maximumMessages)
+                persistAndSynchronize()
+            } else {
+                appendAndSynchronize(entry)
             }
-            persist()
         }
     }
 
@@ -60,20 +65,43 @@ final class LogManager: @unchecked Sendable {
     func clear() {
         queue.sync {
             messages.removeAll()
-            persist()
+            persistAndSynchronize()
         }
     }
 
     func exportURL() -> URL {
         queue.sync {
-            persist()
+            synchronizeFile()
             return fileURL
         }
     }
 
-    private func persist() {
+    private func appendAndSynchronize(_ entry: String) {
+        guard let data = "\(entry)\n".data(using: .utf8) else { return }
+        if !FileManager.default.fileExists(atPath: fileURL.path) {
+            _ = FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+        }
+        do {
+            let handle = try FileHandle(forWritingTo: fileURL)
+            handle.seekToEndOfFile()
+            handle.write(data)
+            handle.synchronizeFile()
+            handle.closeFile()
+        } catch {
+            persistAndSynchronize()
+        }
+    }
+
+    private func persistAndSynchronize() {
         let content = messages.joined(separator: "\n") + (messages.isEmpty ? "" : "\n")
         try? content.write(to: fileURL, atomically: true, encoding: .utf8)
+        synchronizeFile()
+    }
+
+    private func synchronizeFile() {
+        guard let handle = try? FileHandle(forWritingTo: fileURL) else { return }
+        handle.synchronizeFile()
+        handle.closeFile()
     }
 
     private func sanitize(_ content: String) -> String {

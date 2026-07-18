@@ -267,6 +267,7 @@ struct LazyView<Content: View>: View {
     }
 
     var body: Content {
-        build()
+        logger.info("[history-ui] lazy destination build begin (synchronously persisted)")
+        return build()
     }
 }

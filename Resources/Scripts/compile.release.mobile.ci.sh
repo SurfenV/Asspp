@@ -17,7 +17,7 @@ BUILD_ARGS=(
     -configuration Release
     -derivedDataPath "$SRCROOT/build/DerivedDataApp"
     -destination 'generic/platform=iOS'
-    clean build
+    build
     CODE_SIGN_IDENTITY=""
     CODE_SIGNING_REQUIRED=NO
     CODE_SIGN_ENTITLEMENTS=""
