@@ -64,9 +64,81 @@ public enum VersionLookup {
             try ensureFailed(Strings.missingOrInvalidReleaseDate)
         }
 
-        APLogger.info("versions: metadata parsed versionID=\(versionID) displayVersion=\(bundleShortVersionString) elapsed=\(elapsed(since: startedAt))s")
+        let minimumOsVersion = findMinimumOsVersion(in: item)
+        if minimumOsVersion == nil {
+            let itemKeys = item.keys.sorted().joined(separator: ",")
+            let metadataKeys = metadata.keys.sorted().joined(separator: ",")
+            APLogger.info("versions: minimum OS unavailable versionID=\(versionID) itemKeys=[\(itemKeys)] metadataKeys=[\(metadataKeys)]")
+        }
+
+        APLogger.info("versions: metadata parsed versionID=\(versionID) displayVersion=\(bundleShortVersionString) minimumOS=\(minimumOsVersion ?? "unknown") elapsed=\(elapsed(since: startedAt))s")
         APLogger.info("versions: returning metadata through app-lifetime client versionID=\(versionID)")
-        return (VersionMetadata(displayVersion: bundleShortVersionString, releaseDate: releaseDate), account)
+        return (
+            VersionMetadata(
+                displayVersion: bundleShortVersionString,
+                releaseDate: releaseDate,
+                minimumOsVersion: minimumOsVersion
+            ),
+            account
+        )
+    }
+
+    /// Apple has used several spellings and nesting locations for this value
+    /// across Store responses. Search the complete product item so older
+    /// responses can still expose their deployment target when present.
+    private static func findMinimumOsVersion(in value: Any, depth: Int = 0) -> String? {
+        guard depth <= 6 else { return nil }
+
+        if let dictionary = value as? [String: Any] {
+            let preferredKeys = [
+                "minimumOsVersion",
+                "minimumOSVersion",
+                "MinimumOSVersion",
+                "minOsVersion",
+                "minOSVersion",
+                "softwareMinimumOsVersion",
+                "softwareMinimumOSVersion",
+            ]
+            for key in preferredKeys {
+                if let version = versionString(from: dictionary[key]) {
+                    return version
+                }
+            }
+
+            for (key, nestedValue) in dictionary {
+                let normalizedKey = key.lowercased()
+                if normalizedKey.contains("minimum"),
+                   normalizedKey.contains("os"),
+                   let version = versionString(from: nestedValue)
+                {
+                    return version
+                }
+            }
+
+            for nestedValue in dictionary.values {
+                if let version = findMinimumOsVersion(in: nestedValue, depth: depth + 1) {
+                    return version
+                }
+            }
+        } else if let array = value as? [Any] {
+            for nestedValue in array {
+                if let version = findMinimumOsVersion(in: nestedValue, depth: depth + 1) {
+                    return version
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func versionString(from value: Any?) -> String? {
+        if let value = value as? String {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let value = value as? NSNumber {
+            return value.stringValue
+        }
+        return nil
     }
 
     private static func elapsed(since date: Date) -> String {

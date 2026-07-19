@@ -508,6 +508,22 @@
         }
       }
     },
+    "Compatible" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compatible"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可安装"
+          }
+        }
+      }
+    },
     "Completed" : {
       "localizations" : {
         "en" : {
@@ -1190,6 +1206,22 @@
         }
       }
     },
+    "Loading version history…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading version history…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在获取版本历史…"
+          }
+        }
+      }
+    },
     "Manage downloads." : {
       "localizations" : {
         "en" : {
@@ -1206,6 +1238,22 @@
         }
       }
     },
+    "Minimum system version unknown" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Minimum system version unknown"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最低系统版本未知"
+          }
+        }
+      }
+    },
     "More" : {
       "localizations" : {
         "en" : {
@@ -1218,6 +1266,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "更多"
+          }
+        }
+      }
+    },
+    "Newer OS required" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Newer OS required"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统版本过低"
           }
         }
       }
@@ -1604,6 +1668,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "请求成功"
+          }
+        }
+      }
+    },
+    "Requires iOS/iPadOS %@+" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Requires iOS/iPadOS %1$@+"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要 iOS/iPadOS %1$@ 或更高版本"
           }
         }
       }

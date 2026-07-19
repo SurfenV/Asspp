@@ -11,7 +11,7 @@ import OrderedCollections
 
 @MainActor
 class AppPackageArchive: ObservableObject {
-    let accountIdentifier: String?
+    private(set) var accountIdentifier: String?
     let region: String
 
     @Published
@@ -46,7 +46,9 @@ class AppPackageArchive: ObservableObject {
             .joined()
             .lowercased()
         logger.info("[history-init] loading metadata cache bundle=\(package.software.bundleID)")
-        _versionItems = .init(key: "\(packageIdentifier).versions", defaultValue: [:])
+        // v2 adds the historical minimum OS field. Start a fresh cache so
+        // entries written by older builds are fetched again with that field.
+        _versionItems = .init(key: "\(packageIdentifier).versions.v2", defaultValue: [:])
         logger.info("[history-init] loading version-ID cache bundle=\(package.software.bundleID)")
         _versionIdentifiers = .init(key: "\(packageIdentifier).versionNumbers", defaultValue: [])
         logger.info("[history] archive initialized bundle=\(package.software.bundleID) region=\(region) cachedIDs=\(versionIdentifiers.count) cachedMetadata=\(versionItems.count)")
@@ -56,11 +58,20 @@ class AppPackageArchive: ObservableObject {
         if let metadata = versionItems[externalVersion] {
             var pkg = package
             pkg.software.version = metadata.displayVersion
+            if let minimumOsVersion = metadata.minimumOsVersion {
+                pkg.software.minimumOsVersion = minimumOsVersion
+            }
             pkg.externalVersionID = externalVersion
             return pkg
         } else {
             return nil
         }
+    }
+
+    func configureHistoryAccount(_ accountID: String) {
+        let normalizedAccountID = accountID.isEmpty ? nil : accountID
+        accountIdentifier = normalizedAccountID
+        logger.info("[history] account configured bundle=\(package.software.bundleID) account=\(normalizedAccountID == nil ? "missing" : "available")")
     }
 
     func clearVersionItems() {
@@ -184,8 +195,11 @@ class AppPackageArchive: ObservableObject {
         let startedAt = Date()
         logger.info("[history:\(operationID)] metadata batch start requested=\(count) loaded=\(versionItems.count)/\(versionIdentifiers.count)")
 
-        let startingIndex = versionItems.count
-        let pendingVersions = Array(versionIdentifiers.dropFirst(startingIndex).prefix(count))
+        let pendingVersions = Array(
+            versionIdentifiers.enumerated()
+                .filter { versionItems[$0.element] == nil }
+                .prefix(count)
+        )
         let app = package.software
         let initialUserAccount: AppStore.UserAccount
         do {
@@ -202,9 +216,8 @@ class AppPackageArchive: ObservableObject {
         operationTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
                 var userAccount = initialUserAccount
-                for (offset, version) in pendingVersions.enumerated() {
+                for (nextIdx, version) in pendingVersions {
                     try Task.checkCancellation()
-                    let nextIdx = startingIndex + offset
                     let itemStartedAt = Date()
                     logger.info("[history:\(operationID)] metadata item start index=\(nextIdx) versionID=\(version)")
 

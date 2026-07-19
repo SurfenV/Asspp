@@ -99,15 +99,13 @@ struct ProductView: View {
             PackageDisplayView(archive: archive.package)
             if let account {
                 NavigationLink {
-                    // NavigationLink eagerly builds its destination on iOS 15.
-                    // Defer the synchronous cache reads until navigation actually occurs.
-                    LazyView(ProductHistoryView(vm: AppPackageArchive(accountID: account.id, region: region, package: archive.package)))
+                    // Reuse the archive that ProductView already owns. Creating a
+                    // second archive here made iOS 15 repeatedly rebuild the lazy
+                    // destination before it finally pushed the view.
+                    ProductHistoryView(vm: archive, accountID: account.id)
                 } label: {
                     versionHistoryLabel
                 }
-                .simultaneousGesture(TapGesture().onEnded {
-                    logger.info("[history-ui] navigation tapped bundle=\(archive.package.software.bundleID) region=\(region) account=available")
-                })
             } else {
                 Button {
                     logger.warning("[history-ui] navigation rejected: no account for region=\(region)")
@@ -272,20 +270,5 @@ extension AppStore.AppPackage {
     var displaySupportedDevicesIcon: String {
         // TODO: assuming iPhone for now
         "iphone"
-    }
-}
-
-/// Defers building its content until the view is actually rendered. This is
-/// required on iOS 15 because NavigationLink constructs destinations eagerly.
-struct LazyView<Content: View>: View {
-    private let build: () -> Content
-
-    init(_ build: @autoclosure @escaping () -> Content) {
-        self.build = build
-    }
-
-    var body: Content {
-        logger.info("[history-ui] lazy destination build begin (synchronously persisted)")
-        return build()
     }
 }
