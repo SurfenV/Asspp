@@ -34,6 +34,7 @@ class AppPackageArchive: ObservableObject {
     @Published var shouldDismiss = false
 
     private var operationTask: Task<Void, Never>?
+    private var visiblePrefetchTargetIndex = -1
 
     init(accountID: String?, region: String, package: AppStore.AppPackage) {
         let normalizedAccountID = accountID.flatMap { $0.isEmpty ? nil : $0 }
@@ -46,9 +47,9 @@ class AppPackageArchive: ObservableObject {
             .joined()
             .lowercased()
         logger.info("[history-init] loading metadata cache bundle=\(package.software.bundleID)")
-        // v2 adds the historical minimum OS field. Start a fresh cache so
-        // entries written by older builds are fetched again with that field.
-        _versionItems = .init(key: "\(packageIdentifier).versions.v2", defaultValue: [:])
+        // v3 resolves the deployment target from the remote IPA when Apple's
+        // history metadata omits it. Refresh older unknown cached values once.
+        _versionItems = .init(key: "\(packageIdentifier).versions.v3", defaultValue: [:])
         logger.info("[history-init] loading version-ID cache bundle=\(package.software.bundleID)")
         _versionIdentifiers = .init(key: "\(packageIdentifier).versionNumbers", defaultValue: [])
         logger.info("[history] archive initialized bundle=\(package.software.bundleID) region=\(region) cachedIDs=\(versionIdentifiers.count) cachedMetadata=\(versionItems.count)")
@@ -77,6 +78,7 @@ class AppPackageArchive: ObservableObject {
     func clearVersionItems() {
         assert(!loading)
         logger.info("[history] cache cleared bundle=\(package.software.bundleID) ids=\(versionIdentifiers.count) metadata=\(versionItems.count)")
+        visiblePrefetchTargetIndex = -1
         error = nil
         versionIdentifiers = []
         versionItems.removeAll()
@@ -86,6 +88,7 @@ class AppPackageArchive: ObservableObject {
         logger.info("[history] cancel requested bundle=\(package.software.bundleID) active=\(operationTask != nil)")
         operationTask?.cancel()
         operationTask = nil
+        visiblePrefetchTargetIndex = -1
         loading = false
         loadingMessage = ""
     }
@@ -244,6 +247,7 @@ class AppPackageArchive: ObservableObject {
                     self.loadingMessage = ""
                     self.operationTask = nil
                     logger.info("[history:\(operationID)] metadata batch completed loaded=\(self.versionItems.count)/\(self.versionIdentifiers.count)")
+                    self.continueVisiblePrefetchIfNeeded()
                 }
             } catch is CancellationError {
                 logger.info("[history:\(operationID)] metadata batch cancelled elapsed=\(Self.elapsed(since: startedAt))s")
@@ -253,12 +257,41 @@ class AppPackageArchive: ObservableObject {
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.error = error.localizedDescription
+                    self.visiblePrefetchTargetIndex = -1
                     self.loading = false
                     self.loadingMessage = ""
                     self.operationTask = nil
                 }
             }
         }
+    }
+
+    func prefetchVersionItemIfVisible(_ versionID: String) {
+        guard versionItems[versionID] == nil,
+              let index = versionIdentifiers.firstIndex(of: versionID)
+        else {
+            return
+        }
+        if index > visiblePrefetchTargetIndex {
+            visiblePrefetchTargetIndex = index
+            logger.info("[history] visible prefetch target updated index=\(index) versionID=\(versionID)")
+        }
+        continueVisiblePrefetchIfNeeded()
+    }
+
+    private func continueVisiblePrefetchIfNeeded() {
+        guard visiblePrefetchTargetIndex >= 0, !loading else { return }
+        let upperBound = min(visiblePrefetchTargetIndex + 1, versionIdentifiers.count)
+        let missingVisibleItems = versionIdentifiers.prefix(upperBound)
+            .filter { versionItems[$0] == nil }
+        guard !missingVisibleItems.isEmpty else {
+            visiblePrefetchTargetIndex = -1
+            return
+        }
+
+        let count = min(10, missingVisibleItems.count)
+        logger.info("[history] visible prefetch continuing requested=\(count) targetIndex=\(visiblePrefetchTargetIndex)")
+        populateNextVersionItems(count: count)
     }
 
     func populateVersionItem(for versionID: String) {
@@ -302,6 +335,7 @@ class AppPackageArchive: ObservableObject {
                     self.loadingMessage = ""
                     self.operationTask = nil
                     logger.info("[history:\(operationID)] metadata single UI applied displayVersion=\(metadata.displayVersion) elapsed=\(Self.elapsed(since: startedAt))s")
+                    self.continueVisiblePrefetchIfNeeded()
                 }
             } catch is CancellationError {
                 logger.info("[history:\(operationID)] metadata single cancelled elapsed=\(Self.elapsed(since: startedAt))s")
@@ -311,6 +345,7 @@ class AppPackageArchive: ObservableObject {
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.error = error.localizedDescription
+                    self.visiblePrefetchTargetIndex = -1
                     self.loading = false
                     self.loadingMessage = ""
                     self.operationTask = nil

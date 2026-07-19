@@ -50,6 +50,9 @@ struct ProductHistoryView: View {
                         }
                         .contentShape(Rectangle())
                     }
+                    .onAppear {
+                        vm.prefetchVersionItemIfVisible(key)
+                    }
                 }
             }
         }

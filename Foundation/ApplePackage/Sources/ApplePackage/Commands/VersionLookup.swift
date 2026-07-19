@@ -64,7 +64,21 @@ public enum VersionLookup {
             try ensureFailed(Strings.missingOrInvalidReleaseDate)
         }
 
-        let minimumOsVersion = findMinimumOsVersion(in: item)
+        var minimumOsVersion = findMinimumOsVersion(in: item)
+        if minimumOsVersion == nil,
+           let packageURLString = item["URL"] as? String,
+           let packageURL = URL(string: packageURLString)
+        {
+            APLogger.info("versions: remote minimum OS inspection start versionID=\(versionID)")
+            do {
+                minimumOsVersion = try await RemotePackageMetadata.minimumOsVersion(
+                    from: packageURL
+                )
+                APLogger.info("versions: remote minimum OS inspection completed versionID=\(versionID) minimumOS=\(minimumOsVersion ?? "unknown")")
+            } catch {
+                APLogger.info("versions: remote minimum OS inspection failed versionID=\(versionID) error=\(error.localizedDescription)")
+            }
+        }
         if minimumOsVersion == nil {
             let itemKeys = item.keys.sorted().joined(separator: ",")
             let metadataKeys = metadata.keys.sorted().joined(separator: ",")
