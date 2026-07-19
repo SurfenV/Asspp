@@ -14,7 +14,23 @@ public enum VersionLookup {
         app: Software,
         versionID: String
     ) async throws -> VersionMetadata {
+        let output = try await getVersionMetadataReturningAccount(
+            account: account,
+            app: app,
+            versionID: versionID
+        )
+        account = output.account
+        return output.metadata
+    }
+
+    /// Value-based entry point matching `VersionFinder.listReturningAccount`.
+    public static func getVersionMetadataReturningAccount(
+        account initialAccount: Account,
+        app: Software,
+        versionID: String
+    ) async throws -> (metadata: VersionMetadata, account: Account) {
         let startedAt = Date()
+        var account = initialAccount
         APLogger.info("versions: metadata start appID=\(app.id) versionID=\(versionID) pod=\(account.pod ?? "missing")")
         let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
         defer {
@@ -31,13 +47,15 @@ public enum VersionLookup {
             }
         }
 
-        let dict = try await StoreDownloadEndpoint.fetchProductWithFallback(
+        let fetchResult = try await StoreDownloadEndpoint.fetchProductReturningAccount(
             client: client,
-            account: &account,
+            account: account,
             app: app,
             deviceIdentifier: Configuration.deviceIdentifier,
             externalVersionID: versionID
         )
+        account = fetchResult.account
+        let dict = fetchResult.dictionary
 
         guard let items = dict["songList"] as? [[String: Any]], !items.isEmpty else {
             try ensureFailed(Strings.noItemsInResponse)
@@ -59,7 +77,7 @@ public enum VersionLookup {
         }
 
         APLogger.info("versions: metadata parsed versionID=\(versionID) displayVersion=\(bundleShortVersionString) elapsed=\(elapsed(since: startedAt))s")
-        return VersionMetadata(displayVersion: bundleShortVersionString, releaseDate: releaseDate)
+        return (VersionMetadata(displayVersion: bundleShortVersionString, releaseDate: releaseDate), account)
     }
 
     private static func elapsed(since date: Date) -> String {

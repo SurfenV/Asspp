@@ -9,6 +9,8 @@ import AsyncHTTPClient
 import Foundation
 
 extension StoreDownloadEndpoint {
+    typealias ProductFetchResult = (dictionary: [String: Any], account: Account)
+
     /// Fetches the product info from the volumeStore endpoint, transparently
     /// retrying via the redownload endpoint when Apple rejects the request
     /// with failureType 5002.
@@ -19,29 +21,50 @@ extension StoreDownloadEndpoint {
         deviceIdentifier: String,
         externalVersionID: String
     ) async throws -> [String: Any] {
+        let result = try await fetchProductReturningAccount(
+            client: client,
+            account: account,
+            app: app,
+            deviceIdentifier: deviceIdentifier,
+            externalVersionID: externalVersionID
+        )
+        account = result.account
+        return result.dictionary
+    }
+
+    /// Value-based variant for iOS 15's back-deployed concurrency runtime.
+    /// Keeping mutable `inout` access alive across HTTP suspension points can
+    /// prevent the caller's continuation from resuming on affected systems.
+    static func fetchProductReturningAccount(
+        client: HTTPClient,
+        account: Account,
+        app: Software,
+        deviceIdentifier: String,
+        externalVersionID: String
+    ) async throws -> ProductFetchResult {
         let startedAt = Date()
         APLogger.info("store: product request start endpoint=volumeStore versionID=\(externalVersionID.isEmpty ? "latest" : externalVersionID)")
-        var dict = try await StoreDownloadEndpoint.volumeStore.fetchProduct(
+        var result = try await StoreDownloadEndpoint.volumeStore.fetchProductReturningAccount(
             client: client,
-            account: &account,
+            account: account,
             app: app,
             deviceIdentifier: deviceIdentifier,
             externalVersionID: externalVersionID
         )
 
-        if dict["failureType"] as? String == retryableFailureType {
+        if result.dictionary["failureType"] as? String == retryableFailureType {
             APLogger.info("store: volumeStore returned failureType=5002; starting redownload fallback")
-            dict = try await StoreDownloadEndpoint.redownload.fetchProduct(
+            result = try await StoreDownloadEndpoint.redownload.fetchProductReturningAccount(
                 client: client,
-                account: &account,
+                account: result.account,
                 app: app,
                 deviceIdentifier: deviceIdentifier,
                 externalVersionID: externalVersionID
             )
         }
 
-        APLogger.info("store: product request completed elapsed=\(elapsed(since: startedAt))s failureType=\(dict["failureType"] as? String ?? "none")")
-        return dict
+        APLogger.info("store: product request completed elapsed=\(elapsed(since: startedAt))s failureType=\(result.dictionary["failureType"] as? String ?? "none")")
+        return result
     }
 
     /// Runs the product request against this endpoint, following pod redirects,
@@ -53,6 +76,27 @@ extension StoreDownloadEndpoint {
         deviceIdentifier: String,
         externalVersionID: String
     ) async throws -> [String: Any] {
+        let result = try await fetchProductReturningAccount(
+            client: client,
+            account: account,
+            app: app,
+            deviceIdentifier: deviceIdentifier,
+            externalVersionID: externalVersionID
+        )
+        account = result.account
+        return result.dictionary
+    }
+
+    /// Performs the request with value semantics and returns the account after
+    /// cookie and pod updates, avoiding async `inout` access in history flows.
+    func fetchProductReturningAccount(
+        client: HTTPClient,
+        account initialAccount: Account,
+        app: Software,
+        deviceIdentifier: String,
+        externalVersionID: String
+    ) async throws -> ProductFetchResult {
+        var account = initialAccount
         var currentURL = try url(pod: account.pod, deviceIdentifier: deviceIdentifier)
         var redirectAttempt = 0
         var finalResponse: HTTPClient.Response?
@@ -123,7 +167,7 @@ extension StoreDownloadEndpoint {
         guard let dict = plist else { try ensureFailed(Strings.invalidResponse) }
 
         APLogger.info("store: endpoint=\(diagnosticName) plist parsed songListCount=\((dict["songList"] as? [[String: Any]])?.count ?? 0) failureType=\(dict["failureType"] as? String ?? "none")")
-        return dict
+        return (dict, account)
     }
 
     /// Older Asspp builds persisted accounts before ApplePackage stored their

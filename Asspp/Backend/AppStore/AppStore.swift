@@ -51,6 +51,28 @@ class AppStore: ObservableObject {
         accounts.filter { ApplePackage.Configuration.countryCode(for: $0.account.store) == region }
     }
 
+    @MainActor
+    func accountSnapshot(id: String) throws -> UserAccount {
+        logger.info("[account-snapshot] resolving account")
+        guard let account = accounts.first(where: { $0.id == id }) else {
+            logger.error("[account-snapshot] account not found")
+            throw AuthenticationError.accountNotFound
+        }
+        logger.info("[account-snapshot] loaded store=\(account.account.store) pod=\(account.account.pod ?? "missing")")
+        return account
+    }
+
+    @MainActor
+    func saveAccountSnapshot(_ account: UserAccount, id: String) {
+        logger.info("[account-snapshot] write-back begin pod=\(account.account.pod ?? "missing")")
+        guard let idx = accounts.firstIndex(where: { $0.id == id }) else {
+            logger.warning("[account-snapshot] write-back skipped: account removed")
+            return
+        }
+        accounts[idx] = account
+        logger.info("[account-snapshot] write-back completed")
+    }
+
     func withAccount<T>(id: String, _ body: (inout UserAccount) async throws -> T) async throws -> T {
         logger.info("[account-transaction] resolving account")
         guard var account = await accounts.first(where: { $0.id == id }) else {

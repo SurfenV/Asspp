@@ -15,7 +15,26 @@ public enum VersionFinder {
         entityType: EntityType? = nil,
         externalVersionID: String? = nil
     ) async throws -> [String] {
+        let output = try await listReturningAccount(
+            account: account,
+            bundleIdentifier: bundleIdentifier,
+            entityType: entityType,
+            externalVersionID: externalVersionID
+        )
+        account = output.account
+        return output.versions
+    }
+
+    /// Value-based entry point used on iOS 15 so no exclusive `inout` access
+    /// spans an async HTTP request.
+    public static func listReturningAccount(
+        account initialAccount: Account,
+        bundleIdentifier: String,
+        entityType: EntityType? = nil,
+        externalVersionID: String? = nil
+    ) async throws -> (versions: [String], account: Account) {
         let startedAt = Date()
+        var account = initialAccount
         APLogger.info("versions: list start bundle=\(bundleIdentifier) store=\(account.store) pod=\(account.pod ?? "missing")")
         guard let countryCode = Configuration.countryCode(for: account.store) else {
             try ensureFailed(Strings.unsupportedStoreIdentifier(account.store))
@@ -51,13 +70,15 @@ public enum VersionFinder {
             }
         }
 
-        let dict = try await StoreDownloadEndpoint.fetchProductWithFallback(
+        let fetchResult = try await StoreDownloadEndpoint.fetchProductReturningAccount(
             client: client,
-            account: &account,
+            account: account,
             app: app,
             deviceIdentifier: Configuration.deviceIdentifier,
             externalVersionID: resolvedExternalVersionID
         )
+        account = fetchResult.account
+        let dict = fetchResult.dictionary
 
         guard let items = dict["songList"] as? [[String: Any]], !items.isEmpty else {
             if let failureType = dict["failureType"] as? String {
@@ -91,8 +112,8 @@ public enum VersionFinder {
         let result = identifiers.map { "\($0)" }
         try ensure(!result.isEmpty, Strings.noVersionsFound)
 
-        APLogger.info("versions: list parsed count=\(result.count) elapsed=\(elapsed(since: startedAt))s")
-        return result
+        APLogger.info("versions: list parsed count=\(result.count) updatedPod=\(account.pod ?? "missing") elapsed=\(elapsed(since: startedAt))s")
+        return (result, account)
     }
 
     private static func elapsed(since date: Date) -> String {

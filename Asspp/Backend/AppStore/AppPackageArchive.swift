@@ -112,11 +112,16 @@ class AppPackageArchive: ObservableObject {
             }
             defer { watchdog.cancel() }
             do {
-                let versions = try await AppStore.this.withAccount(id: accountIdentifier) { userAccount in
-                    logger.info("[history:\(operationID)] account loaded store=\(userAccount.account.store) pod=\(userAccount.account.pod ?? "missing")")
-                    return try await VersionFinder.list(account: &userAccount.account, bundleIdentifier: bundleID)
-                }
-                logger.info("[history:\(operationID)] account transaction returned count=\(versions.count); applying IDs")
+                var userAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
+                logger.info("[history:\(operationID)] value-based version request begin")
+                let output = try await VersionFinder.listReturningAccount(
+                    account: userAccount.account,
+                    bundleIdentifier: bundleID
+                )
+                logger.info("[history:\(operationID)] value-based version request returned count=\(output.versions.count) pod=\(output.account.pod ?? "missing")")
+                userAccount.account = output.account
+                AppStore.this.saveAccountSnapshot(userAccount, id: accountIdentifier)
+                let versions = output.versions
                 guard !Task.isCancelled else {
                     logger.info("[history:\(operationID)] version-list result discarded after cancellation elapsed=\(Self.elapsed(since: startedAt))s")
                     return
@@ -167,9 +172,15 @@ class AppPackageArchive: ObservableObject {
                     let itemStartedAt = Date()
                     logger.info("[history:\(operationID)] metadata item start index=\(nextIdx) versionID=\(version)")
 
-                    let metadata = try await AppStore.this.withAccount(id: accountIdentifier) { userAccount in
-                        try await VersionLookup.getVersionMetadata(account: &userAccount.account, app: app, versionID: version)
-                    }
+                    var userAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
+                    let output = try await VersionLookup.getVersionMetadataReturningAccount(
+                        account: userAccount.account,
+                        app: app,
+                        versionID: version
+                    )
+                    userAccount.account = output.account
+                    AppStore.this.saveAccountSnapshot(userAccount, id: accountIdentifier)
+                    let metadata = output.metadata
                     try Task.checkCancellation()
                     versionItems[version] = metadata
                     logger.info("[history:\(operationID)] metadata item success index=\(nextIdx) displayVersion=\(metadata.displayVersion) elapsed=\(Self.elapsed(since: itemStartedAt))s")
@@ -206,9 +217,15 @@ class AppPackageArchive: ObservableObject {
             guard let self else { return }
             do {
                 let app = package.software
-                let metadata = try await AppStore.this.withAccount(id: accountIdentifier) { userAccount in
-                    try await VersionLookup.getVersionMetadata(account: &userAccount.account, app: app, versionID: versionID)
-                }
+                var userAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
+                let output = try await VersionLookup.getVersionMetadataReturningAccount(
+                    account: userAccount.account,
+                    app: app,
+                    versionID: versionID
+                )
+                userAccount.account = output.account
+                AppStore.this.saveAccountSnapshot(userAccount, id: accountIdentifier)
+                let metadata = output.metadata
                 guard !Task.isCancelled else { return }
                 versionItems[versionID] = metadata
                 logger.info("[history:\(operationID)] metadata single success displayVersion=\(metadata.displayVersion) elapsed=\(Self.elapsed(since: startedAt))s")
