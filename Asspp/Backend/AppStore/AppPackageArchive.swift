@@ -32,6 +32,9 @@ class AppPackageArchive: ObservableObject {
     var loading = false
     var loadingMessage = ""
     @Published var shouldDismiss = false
+    @Published var compatibilitySearchMessage: String?
+    @Published var compatibleVersionIdentifier: VersionIdentifier?
+    @Published var compatibilitySearchIsRunning = false
 
     private var operationTask: Task<Void, Never>?
     private var visiblePrefetchTargetIndex = -1
@@ -47,9 +50,10 @@ class AppPackageArchive: ObservableObject {
             .joined()
             .lowercased()
         logger.info("[history-init] loading metadata cache bundle=\(package.software.bundleID)")
-        // v3 resolves the deployment target from the remote IPA when Apple's
-        // history metadata omits it. Refresh older unknown cached values once.
-        _versionItems = .init(key: "\(packageIdentifier).versions.v3", defaultValue: [:])
+        // v4 removes Apple's app-level releaseDate, which was incorrectly
+        // repeated for every historical version, and stores the IPA package
+        // date instead.
+        _versionItems = .init(key: "\(packageIdentifier).versions.v4", defaultValue: [:])
         logger.info("[history-init] loading version-ID cache bundle=\(package.software.bundleID)")
         _versionIdentifiers = .init(key: "\(packageIdentifier).versionNumbers", defaultValue: [])
         logger.info("[history] archive initialized bundle=\(package.software.bundleID) region=\(region) cachedIDs=\(versionIdentifiers.count) cachedMetadata=\(versionItems.count)")
@@ -80,6 +84,8 @@ class AppPackageArchive: ObservableObject {
         logger.info("[history] cache cleared bundle=\(package.software.bundleID) ids=\(versionIdentifiers.count) metadata=\(versionItems.count)")
         visiblePrefetchTargetIndex = -1
         error = nil
+        compatibilitySearchMessage = nil
+        compatibleVersionIdentifier = nil
         versionIdentifiers = []
         versionItems.removeAll()
     }
@@ -91,6 +97,7 @@ class AppPackageArchive: ObservableObject {
         visiblePrefetchTargetIndex = -1
         loading = false
         loadingMessage = ""
+        compatibilitySearchIsRunning = false
     }
 
     func populateVersionIdentifiers(_ completion: (() -> Void)? = nil) {
@@ -354,6 +361,198 @@ class AppPackageArchive: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Finds the newest installable version without resolving every row.
+    /// It probes exponentially older versions to bracket the compatibility
+    /// transition, then bisects that range and verifies nearby versions.
+    func findLatestCompatibleVersion() {
+        guard let accountIdentifier,
+              !loading,
+              !versionIdentifiers.isEmpty
+        else {
+            logger.info("[compatibility-search] ignored account=\(accountIdentifier == nil ? "missing" : "available") loading=\(loading) versions=\(versionIdentifiers.count)")
+            return
+        }
+
+        let operationID = String(UUID().uuidString.prefix(8))
+        let identifiers = versionIdentifiers
+        let app = package.software
+        let cachedItems = Dictionary(uniqueKeysWithValues: versionItems.map { ($0.key, $0.value) })
+        let currentSystem = ProcessInfo.processInfo.operatingSystemVersion
+        let initialUserAccount: AppStore.UserAccount
+        do {
+            initialUserAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+
+        loading = true
+        loadingMessage = "Finding a compatible version…"
+        compatibilitySearchIsRunning = true
+        compatibilitySearchMessage = "Checking the newest version…"
+        compatibleVersionIdentifier = nil
+        error = nil
+        logger.info("[compatibility-search:\(operationID)] start versions=\(identifiers.count) system=\(currentSystem.majorVersion).\(currentSystem.minorVersion).\(currentSystem.patchVersion)")
+
+        operationTask = Task.detached(priority: .userInitiated) { [weak self] in
+            var userAccount = initialUserAccount
+            var resolvedItems = cachedItems
+            var probeCount = 0
+
+            func resolve(_ index: Int) async throws -> VersionMetadata {
+                let versionID = identifiers[index]
+                if let cached = resolvedItems[versionID] {
+                    return cached
+                }
+
+                probeCount += 1
+                let message = "Checking candidate \(probeCount): \(index + 1) of \(identifiers.count)…"
+                await MainActor.run { [weak self] in
+                    self?.compatibilitySearchMessage = message
+                }
+                logger.info("[compatibility-search:\(operationID)] probe start index=\(index) versionID=\(versionID)")
+                let output = try await VersionLookup.getVersionMetadataReturningAccount(
+                    account: userAccount.account,
+                    app: app,
+                    versionID: versionID
+                )
+                userAccount.account = output.account
+                resolvedItems[versionID] = output.metadata
+                let updatedUserAccount = userAccount
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    AppStore.this.saveAccountSnapshot(updatedUserAccount, id: accountIdentifier)
+                    self.versionItems[versionID] = output.metadata
+                }
+                logger.info("[compatibility-search:\(operationID)] probe completed index=\(index) displayVersion=\(output.metadata.displayVersion) minimumOS=\(output.metadata.minimumOsVersion ?? "unknown")")
+                return output.metadata
+            }
+
+            func isCompatible(_ metadata: VersionMetadata) -> Bool? {
+                guard let minimumOsVersion = metadata.minimumOsVersion else {
+                    return nil
+                }
+                return Self.systemVersion(currentSystem, supports: minimumOsVersion)
+            }
+
+            do {
+                var newestKnownIncompatibleIndex = -1
+                var oldestKnownCompatibleIndex: Int?
+                var probeIndex = 0
+
+                while true {
+                    try Task.checkCancellation()
+                    let metadata = try await resolve(probeIndex)
+                    if isCompatible(metadata) == true {
+                        oldestKnownCompatibleIndex = probeIndex
+                        break
+                    }
+                    if isCompatible(metadata) == false {
+                        newestKnownIncompatibleIndex = probeIndex
+                    }
+                    guard probeIndex < identifiers.count - 1 else { break }
+                    probeIndex = min(
+                        identifiers.count - 1,
+                        max(probeIndex + 1, (probeIndex + 1) * 2 - 1)
+                    )
+                }
+
+                guard var compatibleIndex = oldestKnownCompatibleIndex else {
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.loading = false
+                        self.loadingMessage = ""
+                        self.operationTask = nil
+                        self.compatibilitySearchIsRunning = false
+                        self.compatibilitySearchMessage = newestKnownIncompatibleIndex >= 0
+                            ? "No compatible historical version was found."
+                            : "Could not determine the minimum system requirement."
+                    }
+                    logger.info("[compatibility-search:\(operationID)] no compatible result probes=\(probeCount)")
+                    return
+                }
+
+                var lowerBound = max(0, newestKnownIncompatibleIndex)
+                var upperBound = compatibleIndex
+                while upperBound - lowerBound > 1 {
+                    try Task.checkCancellation()
+                    let middle = lowerBound + (upperBound - lowerBound) / 2
+                    let metadata = try await resolve(middle)
+                    if isCompatible(metadata) == true {
+                        upperBound = middle
+                        compatibleIndex = middle
+                    } else {
+                        // Unknown requirements cannot certify compatibility;
+                        // continue toward older versions, then verify nearby.
+                        lowerBound = middle
+                    }
+                }
+
+                // App deployment targets are normally monotonic, but verify a
+                // small window in case a developer briefly lowered it again.
+                let verificationStart = max(0, compatibleIndex - 4)
+                if verificationStart < compatibleIndex {
+                    for index in verificationStart ..< compatibleIndex {
+                        try Task.checkCancellation()
+                        if isCompatible(try await resolve(index)) == true {
+                            compatibleIndex = index
+                            break
+                        }
+                    }
+                }
+
+                let versionID = identifiers[compatibleIndex]
+                let metadata = try await resolve(compatibleIndex)
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.loading = false
+                    self.loadingMessage = ""
+                    self.operationTask = nil
+                    self.compatibilitySearchIsRunning = false
+                    self.compatibleVersionIdentifier = versionID
+                    self.compatibilitySearchMessage = "Found version \(metadata.displayVersion), requiring iOS/iPadOS \(metadata.minimumOsVersion ?? "unknown")+."
+                }
+                logger.info("[compatibility-search:\(operationID)] success index=\(compatibleIndex) displayVersion=\(metadata.displayVersion) probes=\(probeCount)")
+            } catch is CancellationError {
+                logger.info("[compatibility-search:\(operationID)] cancelled probes=\(probeCount)")
+            } catch {
+                guard !Task.isCancelled else { return }
+                logger.error("[compatibility-search:\(operationID)] failed type=\(String(reflecting: type(of: error))) probes=\(probeCount) error=\(error.localizedDescription)")
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.loading = false
+                    self.loadingMessage = ""
+                    self.operationTask = nil
+                    self.compatibilitySearchIsRunning = false
+                    self.compatibilitySearchMessage = nil
+                    self.error = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    nonisolated static func systemVersion(
+        _ current: OperatingSystemVersion,
+        supports requiredVersion: String
+    ) -> Bool? {
+        let components = requiredVersion
+            .split(separator: ".")
+            .compactMap { Int($0) }
+        guard let major = components.first else { return nil }
+        let required = OperatingSystemVersion(
+            majorVersion: major,
+            minorVersion: components.count > 1 ? components[1] : 0,
+            patchVersion: components.count > 2 ? components[2] : 0
+        )
+        if current.majorVersion != required.majorVersion {
+            return current.majorVersion > required.majorVersion
+        }
+        if current.minorVersion != required.minorVersion {
+            return current.minorVersion > required.minorVersion
+        }
+        return current.patchVersion >= required.patchVersion
     }
 
     private nonisolated static func elapsed(since date: Date) -> String {

@@ -58,25 +58,21 @@ public enum VersionLookup {
             try ensureFailed(Strings.missingBundleShortVersionString)
         }
 
-        guard let releaseDateString = metadata["releaseDate"] as? String,
-              let releaseDate = ISO8601DateFormatter().date(from: releaseDateString)
-        else {
-            try ensureFailed(Strings.missingOrInvalidReleaseDate)
-        }
-
         var minimumOsVersion = findMinimumOsVersion(in: item)
-        if minimumOsVersion == nil,
-           let packageURLString = item["URL"] as? String,
+        var packageDate: Date?
+        if let packageURLString = item["URL"] as? String,
            let packageURL = URL(string: packageURLString)
         {
-            APLogger.info("versions: remote minimum OS inspection start versionID=\(versionID)")
+            APLogger.info("versions: remote package inspection start versionID=\(versionID)")
             do {
-                minimumOsVersion = try await RemotePackageMetadata.minimumOsVersion(
-                    from: packageURL
-                )
-                APLogger.info("versions: remote minimum OS inspection completed versionID=\(versionID) minimumOS=\(minimumOsVersion ?? "unknown")")
+                let inspection = try await RemotePackageMetadata.inspect(packageURL)
+                if minimumOsVersion == nil {
+                    minimumOsVersion = inspection.minimumOsVersion
+                }
+                packageDate = inspection.packageDate
+                APLogger.info("versions: remote package inspection completed versionID=\(versionID) minimumOS=\(minimumOsVersion ?? "unknown") packageDate=\(packageDate?.description ?? "unknown")")
             } catch {
-                APLogger.info("versions: remote minimum OS inspection failed versionID=\(versionID) error=\(error.localizedDescription)")
+                APLogger.info("versions: remote package inspection failed versionID=\(versionID) error=\(error.localizedDescription)")
             }
         }
         if minimumOsVersion == nil {
@@ -85,12 +81,12 @@ public enum VersionLookup {
             APLogger.info("versions: minimum OS unavailable versionID=\(versionID) itemKeys=[\(itemKeys)] metadataKeys=[\(metadataKeys)]")
         }
 
-        APLogger.info("versions: metadata parsed versionID=\(versionID) displayVersion=\(bundleShortVersionString) minimumOS=\(minimumOsVersion ?? "unknown") elapsed=\(elapsed(since: startedAt))s")
+        APLogger.info("versions: metadata parsed versionID=\(versionID) displayVersion=\(bundleShortVersionString) minimumOS=\(minimumOsVersion ?? "unknown") packageDate=\(packageDate?.description ?? "unknown") elapsed=\(elapsed(since: startedAt))s")
         APLogger.info("versions: returning metadata through app-lifetime client versionID=\(versionID)")
         return (
             VersionMetadata(
                 displayVersion: bundleShortVersionString,
-                releaseDate: releaseDate,
+                releaseDate: packageDate,
                 minimumOsVersion: minimumOsVersion
             ),
             account

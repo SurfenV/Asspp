@@ -14,7 +14,12 @@ enum RemotePackageMetadata {
     private static let initialLocalEntryLength = 128 * 1024
     private static let maximumInfoPlistLength = 4 * 1024 * 1024
 
-    static func minimumOsVersion(from packageURL: URL) async throws -> String {
+    struct Inspection: Sendable {
+        let minimumOsVersion: String?
+        let packageDate: Date?
+    }
+
+    static func inspect(_ packageURL: URL) async throws -> Inspection {
         let tail = try await fetch(
             packageURL,
             range: "bytes=-\(tailLength)",
@@ -101,15 +106,20 @@ enum RemotePackageMetadata {
             throw RemotePackageMetadataError.invalidInfoPlist
         }
 
+        var minimumOsVersion: String?
         for key in ["MinimumOSVersion", "LSMinimumSystemVersion"] {
             if let value = plist[key] as? String {
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
-                    return trimmed
+                    minimumOsVersion = trimmed
+                    break
                 }
             }
         }
-        throw RemotePackageMetadataError.minimumOsVersionMissing
+        return Inspection(
+            minimumOsVersion: minimumOsVersion,
+            packageDate: entry.modificationDate
+        )
     }
 
     private static func fetch(
@@ -201,7 +211,11 @@ enum RemotePackageMetadata {
                     checksum: try data.zipUInt32(at: offset + 16),
                     compressedSize: Int(compressedSizeValue),
                     uncompressedSize: Int(uncompressedSizeValue),
-                    localHeaderOffset: Int64(localHeaderOffsetValue)
+                    localHeaderOffset: Int64(localHeaderOffsetValue),
+                    modificationDate: try zipDate(
+                        time: data.zipUInt16(at: offset + 12),
+                        date: data.zipUInt16(at: offset + 14)
+                    )
                 )
             }
             offset += recordLength
@@ -215,6 +229,33 @@ enum RemotePackageMetadata {
             && components[0] == "Payload"
             && components[1].hasSuffix(".app")
             && components[2] == "Info.plist"
+    }
+
+    /// ZIP entries use a timezone-free MS-DOS timestamp. Treat it as UTC and
+    /// use it only as an approximate package date, never as an exact App Store
+    /// release timestamp.
+    private static func zipDate(time: UInt16, date: UInt16) -> Date? {
+        let year = 1980 + Int((date >> 9) & 0x7F)
+        let month = Int((date >> 5) & 0x0F)
+        let day = Int(date & 0x1F)
+        guard year >= 2007,
+              year <= Calendar.current.component(.year, from: Date()) + 1,
+              (1 ... 12).contains(month),
+              (1 ... 31).contains(day)
+        else {
+            return nil
+        }
+
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.timeZone = TimeZone(secondsFromGMT: 0)
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = Int((time >> 11) & 0x1F)
+        components.minute = Int((time >> 5) & 0x3F)
+        components.second = Int(time & 0x1F) * 2
+        return components.date
     }
 
     private static func localHeaderLength(in data: Data) throws -> Int {
@@ -276,6 +317,7 @@ private struct CentralEntry: Sendable {
     let compressedSize: Int
     let uncompressedSize: Int
     let localHeaderOffset: Int64
+    let modificationDate: Date?
 }
 
 private struct ByteRangeResult: Sendable {

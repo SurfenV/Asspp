@@ -15,101 +15,151 @@ struct ProductHistoryView: View {
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
-        List {
-            if vm.versionIdentifiers.isEmpty {
-                Label("Loading version history…", systemImage: "clock")
-                    .foregroundColor(.secondary)
-            }
-            ForEach(vm.versionIdentifiers, id: \.self) { key in
-                if let aid = vm.accountIdentifier,
-                   let pkg = vm.package(for: key),
-                   let metadata = vm.versionItems[key]
-                {
-                    Menu {
-                        Button("Download \(pkg.software.version)") {
-                            Task {
-                                do {
-                                    try await Downloads.this.startDownload(for: pkg, accountID: aid)
-                                } catch {
-                                    vm.error = error.localizedDescription
-                                }
+        ScrollViewReader { proxy in
+            List {
+                compatibilityFinder
+
+                if vm.versionIdentifiers.isEmpty {
+                    Label("Loading version history…", systemImage: "clock")
+                        .foregroundColor(.secondary)
+                }
+                ForEach(vm.versionIdentifiers, id: \.self) { key in
+                    if let aid = vm.accountIdentifier,
+                       let pkg = vm.package(for: key),
+                       let metadata = vm.versionItems[key]
+                    {
+                        Menu {
+                            Button("Download \(pkg.software.version)") {
+                                startDownload(pkg, accountID: aid)
                             }
+                        } label: {
+                            versionRow(metadata)
                         }
-                    } label: {
-                        versionRow(metadata)
-                    }
-                } else {
-                    Button {
-                        vm.populateVersionItem(for: key)
-                    } label: {
-                        HStack {
-                            Text(key).foregroundColor(.secondary)
-                            Spacer()
-                            Image(systemName: "arrow.down.circle")
-                                .foregroundColor(.secondary)
+                        .id(key)
+                    } else {
+                        Button {
+                            vm.populateVersionItem(for: key)
+                        } label: {
+                            HStack {
+                                Text(key).foregroundColor(.secondary)
+                                Spacer()
+                                Image(systemName: "arrow.down.circle")
+                                    .foregroundColor(.secondary)
+                            }
+                            .contentShape(Rectangle())
                         }
-                        .contentShape(Rectangle())
-                    }
-                    .onAppear {
-                        vm.prefetchVersionItemIfVisible(key)
+                        .id(key)
                     }
                 }
             }
-        }
-        .navigationTitle("Version History")
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Menu {
-                    Button {
-                        vm.populateNextVersionItems(count: 20)
-                    } label: {
-                        Label("Load More", systemImage: "arrow.down.circle")
-                    }
-                    .disabled(vm.isVersionItemsFullyLoaded)
-                    Divider()
-                    Button(role: .destructive) {
-                        guard !vm.loading else { return }
-                        vm.clearVersionItems()
-                        vm.populateVersionIdentifiers {
-                            vm.populateNextVersionItems(count: 5)
+            .navigationTitle("Version History")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
+                        Button {
+                            vm.populateNextVersionItems(count: 20)
+                        } label: {
+                            Label("Load More", systemImage: "arrow.down.circle")
+                        }
+                        .disabled(vm.isVersionItemsFullyLoaded)
+                        Divider()
+                        Button(role: .destructive) {
+                            guard !vm.loading else { return }
+                            vm.clearVersionItems()
+                            vm.populateVersionIdentifiers()
+                        } label: {
+                            Label("Refresh", systemImage: "arrow.clockwise.circle")
                         }
                     } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise.circle")
+                        Image(systemName: "ellipsis.circle")
                     }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
                 }
             }
+            .alert(isPresented: $showErrorAlert) {
+                Alert(
+                    title: Text("Oops"),
+                    message: Text(vm.error ?? String(localized: "Unknown Error")),
+                    dismissButton: .default(Text("OK"), action: {
+                        vm.error = nil
+                        if vm.shouldDismiss {
+                            dismiss()
+                        }
+                    })
+                )
+            }
+            .onChange(of: vm.error) { newValue in
+                showErrorAlert = newValue != nil
+            }
+            .onChange(of: vm.compatibleVersionIdentifier) { versionID in
+                guard let versionID else { return }
+                withAnimation {
+                    proxy.scrollTo(versionID, anchor: .center)
+                }
+            }
+            .onAppear {
+                vm.configureHistoryAccount(accountID)
+                logger.info("[history-ui] appeared bundle=\(vm.package.software.bundleID) cachedIDs=\(vm.versionIdentifiers.count) cachedMetadata=\(vm.versionItems.count)")
+                if vm.versionIdentifiers.isEmpty {
+                    vm.populateVersionIdentifiers()
+                }
+            }
+            .onDisappear {
+                logger.info("[history-ui] disappeared bundle=\(vm.package.software.bundleID)")
+                vm.cancelLoading()
+            }
         }
-        .alert(isPresented: $showErrorAlert) {
-            Alert(
-                title: Text("Oops"),
-                message: Text(vm.error ?? String(localized: "Unknown Error")),
-                dismissButton: .default(Text("OK"), action: {
-                    vm.error = nil
-                    if vm.shouldDismiss {
-                        dismiss()
-                    }
-                })
+    }
+
+    private var compatibilityFinder: some View {
+        Section {
+            Button {
+                vm.findLatestCompatibleVersion()
+            } label: {
+                Label("Find Latest Compatible Version", systemImage: "checkmark.magnifyingglass")
+            }
+            .disabled(
+                vm.loading
+                    || vm.versionIdentifiers.isEmpty
+                    || vm.accountIdentifier == nil
             )
-        }
-        .onChange(of: vm.error) { newValue in
-            showErrorAlert = newValue != nil
-        }
-        .onAppear {
-            vm.configureHistoryAccount(accountID)
-            logger.info("[history-ui] appeared bundle=\(vm.package.software.bundleID) cachedIDs=\(vm.versionIdentifiers.count) cachedMetadata=\(vm.versionItems.count)")
-            if vm.versionIdentifiers.isEmpty {
-                vm.populateVersionIdentifiers {
-                    vm.populateNextVersionItems(count: 5)
+
+            if vm.compatibilitySearchIsRunning {
+                HStack(spacing: 12) {
+                    ProgressView()
+                    Text(vm.compatibilitySearchMessage ?? "Searching…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-            } else if vm.versionItems.isEmpty {
-                vm.populateNextVersionItems(count: 5)
+            } else if let message = vm.compatibilitySearchMessage {
+                Label(message, systemImage: vm.compatibleVersionIdentifier == nil
+                    ? "exclamationmark.magnifyingglass"
+                    : "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(vm.compatibleVersionIdentifier == nil ? .orange : .green)
             }
+
+            if let versionID = vm.compatibleVersionIdentifier,
+               let aid = vm.accountIdentifier,
+               let pkg = vm.package(for: versionID)
+            {
+                Button {
+                    startDownload(pkg, accountID: aid)
+                } label: {
+                    Label("Download \(pkg.software.version)", systemImage: "arrow.down.circle.fill")
+                }
+            }
+        } footer: {
+            Text("Uses exponential probing and binary search, then checks nearby versions. Only the tested candidates are loaded.")
         }
-        .onDisappear {
-            logger.info("[history-ui] disappeared bundle=\(vm.package.software.bundleID)")
-            vm.cancelLoading()
+    }
+
+    private func startDownload(_ package: AppStore.AppPackage, accountID: String) {
+        Task {
+            do {
+                try await Downloads.this.startDownload(for: package, accountID: accountID)
+            } catch {
+                vm.error = error.localizedDescription
+            }
         }
     }
 
@@ -122,9 +172,15 @@ struct ProductHistoryView: View {
                 Spacer()
                 compatibilityBadge(metadata.minimumOsVersion)
             }
-            Text(metadata.releaseDate.formatted(date: .abbreviated, time: .omitted))
-                .font(.caption)
-                .foregroundColor(.secondary)
+            if let packageDate = metadata.releaseDate {
+                Text("Package date (approx.): \(packageDate.formatted(date: .abbreviated, time: .omitted))")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("Package date unavailable")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
             if let minimumOsVersion = metadata.minimumOsVersion {
                 Text("Requires iOS/iPadOS \(minimumOsVersion)+")
                     .font(.caption)
@@ -156,16 +212,10 @@ struct ProductHistoryView: View {
 
     private static func currentSystemSupports(_ minimumOsVersion: String) -> Bool? {
         #if os(iOS)
-            let components = minimumOsVersion
-                .split(separator: ".")
-                .compactMap { Int($0) }
-            guard let major = components.first else { return nil }
-            let required = OperatingSystemVersion(
-                majorVersion: major,
-                minorVersion: components.count > 1 ? components[1] : 0,
-                patchVersion: components.count > 2 ? components[2] : 0
+            return AppPackageArchive.systemVersion(
+                ProcessInfo.processInfo.operatingSystemVersion,
+                supports: minimumOsVersion
             )
-            return ProcessInfo.processInfo.isOperatingSystemAtLeast(required)
         #else
             return nil
         #endif
