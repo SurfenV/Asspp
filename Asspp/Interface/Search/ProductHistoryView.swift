@@ -48,56 +48,28 @@ struct ProductHistoryView: View {
                 }
             }
         }
-        .overlay {
-            ZStack {
-                Rectangle()
-                    .foregroundStyle(.clear)
-                    .background(.ultraThinMaterial)
-                VStack(spacing: 12) {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                    Text(vm.loadingMessage)
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                    Button("Cancel") {
-                        vm.cancelLoading()
-                    }
-                }
-            }
-            .opacity(vm.loading ? 1 : 0)
-            .animation(.default, value: vm.loading)
-            .allowsHitTesting(vm.loading)
-            .ignoresSafeArea(edges: [.vertical])
-        }
-        .animation(.default, value: vm.versionIdentifiers)
-        .animation(.default, value: vm.versionItems)
-        .animation(.default, value: vm.loading)
         .navigationTitle("Version History")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                if vm.loading {
-                    ProgressView()
-                } else {
-                    Menu {
-                        Button {
+                Menu {
+                    Button {
+                        vm.populateNextVersionItems()
+                    } label: {
+                        Label("Load More", systemImage: "arrow.down.circle")
+                    }
+                    .disabled(vm.isVersionItemsFullyLoaded)
+                    Divider()
+                    Button(role: .destructive) {
+                        guard !vm.loading else { return }
+                        vm.clearVersionItems()
+                        vm.populateVersionIdentifiers {
                             vm.populateNextVersionItems()
-                        } label: {
-                            Label("Load More", systemImage: "arrow.down.circle")
-                        }
-                        .disabled(vm.isVersionItemsFullyLoaded)
-                        Divider()
-                        Button(role: .destructive) {
-                            vm.clearVersionItems()
-                            vm.populateVersionIdentifiers {
-                                vm.populateNextVersionItems()
-                            }
-                        } label: {
-                            Label("Refresh", systemImage: "arrow.clockwise.circle")
                         }
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        Label("Refresh", systemImage: "arrow.clockwise.circle")
                     }
-                    .disabled(vm.loading) // just make sure
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
             }
         }

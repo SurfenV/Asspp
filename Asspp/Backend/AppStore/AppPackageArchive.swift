@@ -29,8 +29,8 @@ class AppPackageArchive: ObservableObject {
     }
 
     @Published var error: String?
-    @Published var loading = false
-    @Published var loadingMessage = ""
+    var loading = false
+    var loadingMessage = ""
     @Published var shouldDismiss = false
 
     private var operationTask: Task<Void, Never>?
@@ -104,7 +104,7 @@ class AppPackageArchive: ObservableObject {
 
         loading = true
         loadingMessage = "Loading version list…"
-        error = nil
+        if error != nil { error = nil }
 
         operationTask = Task.detached(priority: .userInitiated) { [weak self] in
             let watchdog = Task.detached(priority: .utility) {
@@ -197,7 +197,7 @@ class AppPackageArchive: ObservableObject {
 
         loading = true
         loadingMessage = "Loading version details…"
-        error = nil
+        if error != nil { error = nil }
 
         operationTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
@@ -268,7 +268,7 @@ class AppPackageArchive: ObservableObject {
 
         loading = true
         loadingMessage = "Loading version details…"
-        error = nil
+        if error != nil { error = nil }
 
         operationTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
