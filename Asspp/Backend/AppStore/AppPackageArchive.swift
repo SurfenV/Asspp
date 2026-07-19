@@ -306,7 +306,7 @@ class AppPackageArchive: ObservableObject {
         }
     }
 
-    private static func elapsed(since date: Date) -> String {
+    private nonisolated static func elapsed(since date: Date) -> String {
         String(format: "%.2f", Date().timeIntervalSince(date))
     }
 }
