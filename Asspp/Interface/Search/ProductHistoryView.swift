@@ -12,12 +12,14 @@ struct ProductHistoryView: View {
     @ObservedObject var vm: AppPackageArchive
     let accountID: String
     @State private var showErrorAlert = false
+    @State private var experimentalMinimumOS = Self.defaultExperimentalMinimumOS
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
         ScrollViewReader { proxy in
             List {
                 compatibilityFinder
+                experimentalIPABuilder
 
                 if vm.versionIdentifiers.isEmpty {
                     Label("Loading version history…", systemImage: "clock")
@@ -153,6 +155,85 @@ struct ProductHistoryView: View {
         }
     }
 
+    private var experimentalIPABuilder: some View {
+        Section {
+            HStack {
+                Text("Target iOS/iPadOS")
+                Spacer()
+                TextField("15.0", text: $experimentalMinimumOS)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 90)
+            }
+
+            Button {
+                vm.createExperimentalIPA(
+                    endpoint: .latest,
+                    minimumOS: experimentalMinimumOS
+                )
+            } label: {
+                Label("Create from Latest Version", systemImage: "hammer")
+            }
+            .disabled(experimentalActionDisabled)
+
+            Button {
+                vm.createExperimentalIPA(
+                    endpoint: .oldest,
+                    minimumOS: experimentalMinimumOS
+                )
+            } label: {
+                Label("Create from Oldest Version", systemImage: "hammer.fill")
+            }
+            .disabled(experimentalActionDisabled)
+
+            if vm.experimentalIPAIsRunning {
+                HStack(spacing: 12) {
+                    ProgressView()
+                    Text(vm.experimentalIPAMessage ?? "Creating experimental IPA…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            } else if let message = vm.experimentalIPAMessage {
+                Label(message, systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+
+            if let result = vm.experimentalIPAResult {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Version \(result.displayVersion)")
+                        .font(.subheadline.weight(.medium))
+                    Text("MinimumOSVersion: \(result.originalMinimumOS ?? "missing") → \(result.patchedMinimumOS)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Button {
+                    _ = AirDrop(items: [result.patchedURL, result.reportURL])
+                } label: {
+                    Label("Share Patched IPA", systemImage: "square.and.arrow.up")
+                }
+
+                Button {
+                    _ = AirDrop(items: [result.originalURL])
+                } label: {
+                    Label("Share Original IPA", systemImage: "archivebox")
+                }
+            }
+        } header: {
+            Text("Compatibility Experiment")
+        } footer: {
+            Text("Downloads the selected endpoint, preserves an original IPA, and changes only the main app Info.plist. TrollStore must re-sign the patched IPA. This does not make newer APIs compatible with iOS 15.")
+        }
+    }
+
+    private var experimentalActionDisabled: Bool {
+        vm.loading
+            || vm.versionIdentifiers.isEmpty
+            || vm.accountIdentifier == nil
+            || ExperimentalIPABuilder.normalizedMinimumOS(experimentalMinimumOS) == nil
+    }
+
     private func startDownload(_ package: AppStore.AppPackage, accountID: String) {
         Task {
             do {
@@ -219,5 +300,10 @@ struct ProductHistoryView: View {
         #else
             return nil
         #endif
+    }
+
+    private static var defaultExperimentalMinimumOS: String {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        return "\(version.majorVersion).\(version.minorVersion)"
     }
 }

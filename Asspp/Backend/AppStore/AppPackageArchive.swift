@@ -9,6 +9,11 @@ import ApplePackage
 import Foundation
 import OrderedCollections
 
+enum ExperimentalHistoryEndpoint: String, Sendable {
+    case latest
+    case oldest
+}
+
 @MainActor
 class AppPackageArchive: ObservableObject {
     private(set) var accountIdentifier: String?
@@ -35,6 +40,9 @@ class AppPackageArchive: ObservableObject {
     @Published var compatibilitySearchMessage: String?
     @Published var compatibleVersionIdentifier: VersionIdentifier?
     @Published var compatibilitySearchIsRunning = false
+    @Published var experimentalIPAMessage: String?
+    @Published var experimentalIPAIsRunning = false
+    @Published var experimentalIPAResult: ExperimentalIPAResult?
 
     private var operationTask: Task<Void, Never>?
     private var visiblePrefetchTargetIndex = -1
@@ -86,6 +94,8 @@ class AppPackageArchive: ObservableObject {
         error = nil
         compatibilitySearchMessage = nil
         compatibleVersionIdentifier = nil
+        experimentalIPAMessage = nil
+        experimentalIPAResult = nil
         versionIdentifiers = []
         versionItems.removeAll()
     }
@@ -98,6 +108,7 @@ class AppPackageArchive: ObservableObject {
         loading = false
         loadingMessage = ""
         compatibilitySearchIsRunning = false
+        experimentalIPAIsRunning = false
     }
 
     func populateVersionIdentifiers(_ completion: (() -> Void)? = nil) {
@@ -554,6 +565,118 @@ class AppPackageArchive: ObservableObject {
             return current.minorVersion > required.minorVersion
         }
         return current.patchVersion >= required.patchVersion
+    }
+
+    func createExperimentalIPA(
+        endpoint: ExperimentalHistoryEndpoint,
+        minimumOS input: String
+    ) {
+        guard let accountIdentifier,
+              !loading,
+              !versionIdentifiers.isEmpty
+        else {
+            logger.info("[experimental-ipa] request ignored endpoint=\(endpoint.rawValue) loading=\(loading) versions=\(versionIdentifiers.count)")
+            return
+        }
+        guard let minimumOS = ExperimentalIPABuilder.normalizedMinimumOS(input) else {
+            error = "Enter a valid minimum system version such as 15.0 or 15.8."
+            return
+        }
+
+        let versionID: String
+        switch endpoint {
+        case .latest:
+            guard let first = versionIdentifiers.first else { return }
+            versionID = first
+        case .oldest:
+            guard let last = versionIdentifiers.last else { return }
+            versionID = last
+        }
+
+        let operationID = String(UUID().uuidString.prefix(8))
+        let app = package.software
+        let cachedMetadata = versionItems[versionID]
+        let initialUserAccount: AppStore.UserAccount
+        do {
+            initialUserAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+
+        loading = true
+        loadingMessage = "Creating experimental IPA…"
+        experimentalIPAIsRunning = true
+        experimentalIPAMessage = "Resolving the \(endpoint.rawValue) historical version…"
+        experimentalIPAResult = nil
+        error = nil
+        logger.info("[experimental-ipa:\(operationID)] UI request endpoint=\(endpoint.rawValue) versionID=\(versionID) targetOS=\(minimumOS)")
+
+        operationTask = Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                var userAccount = initialUserAccount
+                let metadata: VersionMetadata
+                if let cachedMetadata {
+                    metadata = cachedMetadata
+                } else {
+                    let output = try await VersionLookup.getVersionMetadataReturningAccount(
+                        account: userAccount.account,
+                        app: app,
+                        versionID: versionID
+                    )
+                    userAccount.account = output.account
+                    metadata = output.metadata
+                    let updatedUserAccount = userAccount
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        AppStore.this.saveAccountSnapshot(updatedUserAccount, id: accountIdentifier)
+                        self.versionItems[versionID] = metadata
+                    }
+                }
+                try Task.checkCancellation()
+
+                let result = try await ExperimentalIPABuilder.build(
+                    account: &userAccount.account,
+                    app: app,
+                    versionID: versionID,
+                    displayVersion: metadata.displayVersion,
+                    minimumOS: minimumOS,
+                    endpointLabel: endpoint.rawValue,
+                    progress: { [weak self] message in
+                        await MainActor.run {
+                            self?.experimentalIPAMessage = message
+                        }
+                    }
+                )
+                try Task.checkCancellation()
+                let updatedUserAccount = userAccount
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    AppStore.this.saveAccountSnapshot(updatedUserAccount, id: accountIdentifier)
+                    self.loading = false
+                    self.loadingMessage = ""
+                    self.operationTask = nil
+                    self.experimentalIPAIsRunning = false
+                    self.experimentalIPAResult = result
+                    self.experimentalIPAMessage = "Created \(endpoint.rawValue) version \(result.displayVersion) with MinimumOSVersion \(result.patchedMinimumOS)."
+                }
+                logger.info("[experimental-ipa:\(operationID)] UI completed endpoint=\(endpoint.rawValue) displayVersion=\(result.displayVersion) patched=\(result.patchedURL.lastPathComponent)")
+            } catch is CancellationError {
+                logger.info("[experimental-ipa:\(operationID)] cancelled endpoint=\(endpoint.rawValue)")
+            } catch {
+                guard !Task.isCancelled else { return }
+                logger.error("[experimental-ipa:\(operationID)] failed endpoint=\(endpoint.rawValue) type=\(String(reflecting: type(of: error))) error=\(error.localizedDescription)")
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.loading = false
+                    self.loadingMessage = ""
+                    self.operationTask = nil
+                    self.experimentalIPAIsRunning = false
+                    self.experimentalIPAMessage = nil
+                    self.error = error.localizedDescription
+                }
+            }
+        }
     }
 
     private nonisolated static func elapsed(since date: Date) -> String {
