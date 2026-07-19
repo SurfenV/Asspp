@@ -79,7 +79,7 @@ class AppPackageArchive: ObservableObject {
         loadingMessage = ""
     }
 
-    func populateVersionIdentifiers(_ completion: (() async -> Void)? = nil) {
+    func populateVersionIdentifiers(_ completion: (() -> Void)? = nil) {
         guard let accountIdentifier, !accountIdentifier.isEmpty else {
             logger.error("[history] version-list rejected: no account bundle=\(package.software.bundleID)")
             error = "No App Store account is available for the \(region) region."
@@ -93,12 +93,20 @@ class AppPackageArchive: ObservableObject {
         let operationID = String(UUID().uuidString.prefix(8))
         let startedAt = Date()
         logger.info("[history:\(operationID)] version-list start bundle=\(bundleID) region=\(region)")
+
+        let initialUserAccount: AppStore.UserAccount
+        do {
+            initialUserAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+
         loading = true
         loadingMessage = "Loading version list…"
         error = nil
 
-        operationTask = Task { [weak self] in
-            guard let self else { return }
+        operationTask = Task.detached(priority: .userInitiated) { [weak self] in
             let watchdog = Task.detached(priority: .utility) {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 guard !Task.isCancelled else { return }
@@ -114,59 +122,56 @@ class AppPackageArchive: ObservableObject {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 guard !Task.isCancelled else { return }
                 logger.warning("[history:\(operationID)] main-actor probe scheduled after 5s")
-                await MainActor.run {
+                DispatchQueue.main.async {
                     logger.warning("[history:\(operationID)] main-actor probe completed after 5s")
                 }
             }
-            defer {
+            do {
+                logger.info("[history:\(operationID)] value-based version request begin")
+                let output = try await VersionFinder.listReturningAccount(
+                    account: initialUserAccount.account,
+                    bundleIdentifier: bundleID
+                )
+                try Task.checkCancellation()
+                logger.info("[history:\(operationID)] detached version backend returned count=\(output.versions.count); dispatching UI callback")
+
+                DispatchQueue.main.async { [weak self] in
+                    watchdog.cancel()
+                    mainActorProbe.cancel()
+                    guard let self else { return }
+                    var userAccount = initialUserAccount
+                    userAccount.account = output.account
+                    AppStore.this.saveAccountSnapshot(userAccount, id: accountIdentifier)
+                    self.versionIdentifiers = Array(output.versions.reversed())
+                    logger.info("[history:\(operationID)] version IDs applied count=\(self.versionIdentifiers.count)")
+                    logger.info("[history:\(operationID)] version-list success count=\(output.versions.count) elapsed=\(Self.elapsed(since: startedAt))s")
+                    self.loading = false
+                    self.loadingMessage = ""
+                    self.operationTask = nil
+                    logger.info("[history:\(operationID)] version-list UI completed")
+                    completion?()
+                }
+            } catch is CancellationError {
                 watchdog.cancel()
                 mainActorProbe.cancel()
-            }
-            do {
-                var userAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
-                logger.info("[history:\(operationID)] value-based version request begin")
-                let account = userAccount.account
-                let request = Task.detached(priority: .userInitiated) {
-                    logger.info("[history:\(operationID)] detached version backend entered")
-                    let output = try await VersionFinder.listReturningAccount(
-                        account: account,
-                        bundleIdentifier: bundleID
-                    )
-                    logger.info("[history:\(operationID)] detached version backend returned count=\(output.versions.count)")
-                    return output
-                }
-                let output = try await withTaskCancellationHandler(
-                    operation: { try await request.value },
-                    onCancel: { request.cancel() }
-                )
-                logger.info("[history:\(operationID)] value-based version request returned count=\(output.versions.count) pod=\(output.account.pod ?? "missing")")
-                userAccount.account = output.account
-                AppStore.this.saveAccountSnapshot(userAccount, id: accountIdentifier)
-                let versions = output.versions
-                guard !Task.isCancelled else {
-                    logger.info("[history:\(operationID)] version-list result discarded after cancellation elapsed=\(Self.elapsed(since: startedAt))s")
-                    return
-                }
-                versionIdentifiers = Array(versions.reversed())
-                logger.info("[history:\(operationID)] version IDs applied count=\(versionIdentifiers.count)")
-                logger.info("[history:\(operationID)] version-list success count=\(versions.count) elapsed=\(Self.elapsed(since: startedAt))s")
-            } catch is CancellationError {
                 logger.info("[history:\(operationID)] version-list cancelled elapsed=\(Self.elapsed(since: startedAt))s")
-                return
             } catch {
                 guard !Task.isCancelled else { return }
                 logger.error("[history:\(operationID)] version-list failed type=\(String(reflecting: type(of: error))) elapsed=\(Self.elapsed(since: startedAt))s error=\(error.localizedDescription)")
-                if case .licenseRequired = error as? ApplePackageError {
-                    shouldDismiss = true
+                DispatchQueue.main.async { [weak self] in
+                    watchdog.cancel()
+                    mainActorProbe.cancel()
+                    guard let self else { return }
+                    if case .licenseRequired = error as? ApplePackageError {
+                        self.shouldDismiss = true
+                    }
+                    self.error = error.localizedDescription
+                    self.loading = false
+                    self.loadingMessage = ""
+                    self.operationTask = nil
+                    logger.info("[history:\(operationID)] version-list UI failed callback completed")
                 }
-                self.error = error.localizedDescription
             }
-            guard !Task.isCancelled else { return }
-            loading = false
-            loadingMessage = ""
-            operationTask = nil
-            logger.info("[history:\(operationID)] version-list UI completed")
-            await completion?()
         }
     }
 
@@ -178,57 +183,68 @@ class AppPackageArchive: ObservableObject {
         let operationID = String(UUID().uuidString.prefix(8))
         let startedAt = Date()
         logger.info("[history:\(operationID)] metadata batch start requested=\(count) loaded=\(versionItems.count)/\(versionIdentifiers.count)")
+
+        let startingIndex = versionItems.count
+        let pendingVersions = Array(versionIdentifiers.dropFirst(startingIndex).prefix(count))
+        let app = package.software
+        let initialUserAccount: AppStore.UserAccount
+        do {
+            initialUserAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+
         loading = true
         loadingMessage = "Loading version details…"
         error = nil
 
-        operationTask = Task { [weak self] in
-            guard let self else { return }
+        operationTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                for _ in 0 ..< count where !isVersionItemsFullyLoaded {
+                var userAccount = initialUserAccount
+                for (offset, version) in pendingVersions.enumerated() {
                     try Task.checkCancellation()
-                    let nextIdx = versionItems.count
-                    let version = versionIdentifiers[nextIdx]
-                    let app = package.software
+                    let nextIdx = startingIndex + offset
                     let itemStartedAt = Date()
                     logger.info("[history:\(operationID)] metadata item start index=\(nextIdx) versionID=\(version)")
 
-                    var userAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
-                    let account = userAccount.account
-                    let request = Task.detached(priority: .userInitiated) {
-                        logger.info("[history:\(operationID)] detached metadata backend entered index=\(nextIdx)")
-                        let output = try await VersionLookup.getVersionMetadataReturningAccount(
-                            account: account,
-                            app: app,
-                            versionID: version
-                        )
-                        logger.info("[history:\(operationID)] detached metadata backend returned index=\(nextIdx)")
-                        return output
-                    }
-                    let output = try await withTaskCancellationHandler(
-                        operation: { try await request.value },
-                        onCancel: { request.cancel() }
+                    let output = try await VersionLookup.getVersionMetadataReturningAccount(
+                        account: userAccount.account,
+                        app: app,
+                        versionID: version
                     )
                     userAccount.account = output.account
-                    AppStore.this.saveAccountSnapshot(userAccount, id: accountIdentifier)
                     let metadata = output.metadata
                     try Task.checkCancellation()
-                    versionItems[version] = metadata
-                    logger.info("[history:\(operationID)] metadata item success index=\(nextIdx) displayVersion=\(metadata.displayVersion) elapsed=\(Self.elapsed(since: itemStartedAt))s")
+                    let updatedUserAccount = userAccount
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        AppStore.this.saveAccountSnapshot(updatedUserAccount, id: accountIdentifier)
+                        self.versionItems[version] = metadata
+                        logger.info("[history:\(operationID)] metadata item UI applied index=\(nextIdx) displayVersion=\(metadata.displayVersion) elapsed=\(Self.elapsed(since: itemStartedAt))s")
+                    }
+                }
+                try Task.checkCancellation()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.loading = false
+                    self.loadingMessage = ""
+                    self.operationTask = nil
+                    logger.info("[history:\(operationID)] metadata batch completed loaded=\(self.versionItems.count)/\(self.versionIdentifiers.count)")
                 }
             } catch is CancellationError {
                 logger.info("[history:\(operationID)] metadata batch cancelled elapsed=\(Self.elapsed(since: startedAt))s")
-                return
             } catch {
                 guard !Task.isCancelled else { return }
                 logger.error("[history:\(operationID)] metadata batch failed type=\(String(reflecting: type(of: error))) elapsed=\(Self.elapsed(since: startedAt))s error=\(error.localizedDescription)")
-                self.error = error.localizedDescription
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.error = error.localizedDescription
+                    self.loading = false
+                    self.loadingMessage = ""
+                    self.operationTask = nil
+                }
             }
-            guard !Task.isCancelled else { return }
-            loading = false
-            loadingMessage = ""
-            operationTask = nil
-            logger.info("[history:\(operationID)] metadata batch completed loaded=\(versionItems.count)/\(versionIdentifiers.count)")
         }
     }
 
@@ -240,48 +256,53 @@ class AppPackageArchive: ObservableObject {
         let operationID = String(UUID().uuidString.prefix(8))
         let startedAt = Date()
         logger.info("[history:\(operationID)] metadata single start versionID=\(versionID)")
+
+        let app = package.software
+        let initialUserAccount: AppStore.UserAccount
+        do {
+            initialUserAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+
         loading = true
         loadingMessage = "Loading version details…"
         error = nil
 
-        operationTask = Task { [weak self] in
-            guard let self else { return }
+        operationTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                let app = package.software
-                var userAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
-                let account = userAccount.account
-                let request = Task.detached(priority: .userInitiated) {
-                    logger.info("[history:\(operationID)] detached metadata backend entered versionID=\(versionID)")
-                    let output = try await VersionLookup.getVersionMetadataReturningAccount(
-                        account: account,
-                        app: app,
-                        versionID: versionID
-                    )
-                    logger.info("[history:\(operationID)] detached metadata backend returned versionID=\(versionID)")
-                    return output
-                }
-                let output = try await withTaskCancellationHandler(
-                    operation: { try await request.value },
-                    onCancel: { request.cancel() }
+                let output = try await VersionLookup.getVersionMetadataReturningAccount(
+                    account: initialUserAccount.account,
+                    app: app,
+                    versionID: versionID
                 )
+                try Task.checkCancellation()
+                var userAccount = initialUserAccount
                 userAccount.account = output.account
-                AppStore.this.saveAccountSnapshot(userAccount, id: accountIdentifier)
                 let metadata = output.metadata
-                guard !Task.isCancelled else { return }
-                versionItems[versionID] = metadata
-                logger.info("[history:\(operationID)] metadata single success displayVersion=\(metadata.displayVersion) elapsed=\(Self.elapsed(since: startedAt))s")
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    AppStore.this.saveAccountSnapshot(userAccount, id: accountIdentifier)
+                    self.versionItems[versionID] = metadata
+                    self.loading = false
+                    self.loadingMessage = ""
+                    self.operationTask = nil
+                    logger.info("[history:\(operationID)] metadata single UI applied displayVersion=\(metadata.displayVersion) elapsed=\(Self.elapsed(since: startedAt))s")
+                }
             } catch is CancellationError {
                 logger.info("[history:\(operationID)] metadata single cancelled elapsed=\(Self.elapsed(since: startedAt))s")
-                return
             } catch {
                 guard !Task.isCancelled else { return }
                 logger.error("[history:\(operationID)] metadata single failed type=\(String(reflecting: type(of: error))) elapsed=\(Self.elapsed(since: startedAt))s error=\(error.localizedDescription)")
-                self.error = error.localizedDescription
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.error = error.localizedDescription
+                    self.loading = false
+                    self.loadingMessage = ""
+                    self.operationTask = nil
+                }
             }
-            guard !Task.isCancelled else { return }
-            loading = false
-            loadingMessage = ""
-            operationTask = nil
         }
     }
 

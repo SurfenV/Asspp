@@ -89,7 +89,7 @@ struct ProductHistoryView: View {
                         Button(role: .destructive) {
                             vm.clearVersionItems()
                             vm.populateVersionIdentifiers {
-                                await MainActor.run { vm.populateNextVersionItems() }
+                                vm.populateNextVersionItems()
                             }
                         } label: {
                             Label("Refresh", systemImage: "arrow.clockwise.circle")
@@ -120,7 +120,7 @@ struct ProductHistoryView: View {
             logger.info("[history-ui] appeared bundle=\(vm.package.software.bundleID) cachedIDs=\(vm.versionIdentifiers.count) cachedMetadata=\(vm.versionItems.count)")
             guard vm.versionItems.isEmpty else { return }
             vm.populateVersionIdentifiers {
-                await MainActor.run { vm.populateNextVersionItems() }
+                vm.populateNextVersionItems()
             }
         }
         .onDisappear {
