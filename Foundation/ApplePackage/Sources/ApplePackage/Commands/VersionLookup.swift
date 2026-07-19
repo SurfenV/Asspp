@@ -32,20 +32,8 @@ public enum VersionLookup {
         let startedAt = Date()
         var account = initialAccount
         APLogger.info("versions: metadata start appID=\(app.id) versionID=\(versionID) pod=\(account.pod ?? "missing")")
-        let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
-        defer {
-            APLogger.info("versions: metadata client shutdown begin versionID=\(versionID)")
-            let shutdownFuture = client.shutdown()
-            APLogger.info("versions: metadata client shutdown scheduled versionID=\(versionID)")
-            shutdownFuture.whenComplete { result in
-                switch result {
-                case .success:
-                    APLogger.info("versions: metadata client shutdown completed versionID=\(versionID)")
-                case let .failure(error):
-                    APLogger.error("versions: metadata client shutdown failed versionID=\(versionID) type=\(String(reflecting: type(of: error))) error=\(error.localizedDescription)")
-                }
-            }
-        }
+        let client = Configuration.sharedStoreHTTPClient
+        APLogger.info("versions: shared metadata client acquired versionID=\(versionID)")
 
         let fetchResult = try await StoreDownloadEndpoint.fetchProductReturningAccount(
             client: client,
@@ -77,6 +65,7 @@ public enum VersionLookup {
         }
 
         APLogger.info("versions: metadata parsed versionID=\(versionID) displayVersion=\(bundleShortVersionString) elapsed=\(elapsed(since: startedAt))s")
+        APLogger.info("versions: returning metadata through app-lifetime client versionID=\(versionID)")
         return (VersionMetadata(displayVersion: bundleShortVersionString, releaseDate: releaseDate), account)
     }
 

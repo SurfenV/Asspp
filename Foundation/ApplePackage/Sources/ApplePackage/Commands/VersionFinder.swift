@@ -55,20 +55,8 @@ public enum VersionFinder {
             resolvedExternalVersionID = ""
         }
 
-        let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
-        defer {
-            APLogger.info("versions: client shutdown begin")
-            let shutdownFuture = client.shutdown()
-            APLogger.info("versions: client shutdown scheduled")
-            shutdownFuture.whenComplete { result in
-                switch result {
-                case .success:
-                    APLogger.info("versions: client shutdown completed")
-                case let .failure(error):
-                    APLogger.error("versions: client shutdown failed type=\(String(reflecting: type(of: error))) error=\(error.localizedDescription)")
-                }
-            }
-        }
+        let client = Configuration.sharedStoreHTTPClient
+        APLogger.info("versions: shared store client acquired")
 
         let fetchResult = try await StoreDownloadEndpoint.fetchProductReturningAccount(
             client: client,
@@ -113,6 +101,7 @@ public enum VersionFinder {
         try ensure(!result.isEmpty, Strings.noVersionsFound)
 
         APLogger.info("versions: list parsed count=\(result.count) updatedPod=\(account.pod ?? "missing") elapsed=\(elapsed(since: startedAt))s")
+        APLogger.info("versions: returning list through app-lifetime client")
         return (result, account)
     }
 

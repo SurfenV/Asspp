@@ -110,7 +110,18 @@ class AppPackageArchive: ObservableObject {
                 guard !Task.isCancelled else { return }
                 logger.warning("[history:\(operationID)] watchdog: operation still pending after 30s")
             }
-            defer { watchdog.cancel() }
+            let mainActorProbe = Task.detached(priority: .utility) {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled else { return }
+                logger.warning("[history:\(operationID)] main-actor probe scheduled after 5s")
+                await MainActor.run {
+                    logger.warning("[history:\(operationID)] main-actor probe completed after 5s")
+                }
+            }
+            defer {
+                watchdog.cancel()
+                mainActorProbe.cancel()
+            }
             do {
                 var userAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
                 logger.info("[history:\(operationID)] value-based version request begin")
