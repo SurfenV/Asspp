@@ -460,15 +460,16 @@ class AppPackageArchive: ObservableObject {
                 }
 
                 guard var compatibleIndex = oldestKnownCompatibleIndex else {
+                    let resultMessage = newestKnownIncompatibleIndex >= 0
+                        ? "No compatible historical version was found."
+                        : "Could not determine the minimum system requirement."
                     await MainActor.run { [weak self] in
                         guard let self else { return }
                         self.loading = false
                         self.loadingMessage = ""
                         self.operationTask = nil
                         self.compatibilitySearchIsRunning = false
-                        self.compatibilitySearchMessage = newestKnownIncompatibleIndex >= 0
-                            ? "No compatible historical version was found."
-                            : "Could not determine the minimum system requirement."
+                        self.compatibilitySearchMessage = resultMessage
                     }
                     logger.info("[compatibility-search:\(operationID)] no compatible result probes=\(probeCount)")
                     return
