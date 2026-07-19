@@ -125,9 +125,19 @@ class AppPackageArchive: ObservableObject {
             do {
                 var userAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
                 logger.info("[history:\(operationID)] value-based version request begin")
-                let output = try await VersionFinder.listReturningAccount(
-                    account: userAccount.account,
-                    bundleIdentifier: bundleID
+                let account = userAccount.account
+                let request = Task.detached(priority: .userInitiated) {
+                    logger.info("[history:\(operationID)] detached version backend entered")
+                    let output = try await VersionFinder.listReturningAccount(
+                        account: account,
+                        bundleIdentifier: bundleID
+                    )
+                    logger.info("[history:\(operationID)] detached version backend returned count=\(output.versions.count)")
+                    return output
+                }
+                let output = try await withTaskCancellationHandler(
+                    operation: { try await request.value },
+                    onCancel: { request.cancel() }
                 )
                 logger.info("[history:\(operationID)] value-based version request returned count=\(output.versions.count) pod=\(output.account.pod ?? "missing")")
                 userAccount.account = output.account
@@ -184,10 +194,20 @@ class AppPackageArchive: ObservableObject {
                     logger.info("[history:\(operationID)] metadata item start index=\(nextIdx) versionID=\(version)")
 
                     var userAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
-                    let output = try await VersionLookup.getVersionMetadataReturningAccount(
-                        account: userAccount.account,
-                        app: app,
-                        versionID: version
+                    let account = userAccount.account
+                    let request = Task.detached(priority: .userInitiated) {
+                        logger.info("[history:\(operationID)] detached metadata backend entered index=\(nextIdx)")
+                        let output = try await VersionLookup.getVersionMetadataReturningAccount(
+                            account: account,
+                            app: app,
+                            versionID: version
+                        )
+                        logger.info("[history:\(operationID)] detached metadata backend returned index=\(nextIdx)")
+                        return output
+                    }
+                    let output = try await withTaskCancellationHandler(
+                        operation: { try await request.value },
+                        onCancel: { request.cancel() }
                     )
                     userAccount.account = output.account
                     AppStore.this.saveAccountSnapshot(userAccount, id: accountIdentifier)
@@ -229,10 +249,20 @@ class AppPackageArchive: ObservableObject {
             do {
                 let app = package.software
                 var userAccount = try AppStore.this.accountSnapshot(id: accountIdentifier)
-                let output = try await VersionLookup.getVersionMetadataReturningAccount(
-                    account: userAccount.account,
-                    app: app,
-                    versionID: versionID
+                let account = userAccount.account
+                let request = Task.detached(priority: .userInitiated) {
+                    logger.info("[history:\(operationID)] detached metadata backend entered versionID=\(versionID)")
+                    let output = try await VersionLookup.getVersionMetadataReturningAccount(
+                        account: account,
+                        app: app,
+                        versionID: versionID
+                    )
+                    logger.info("[history:\(operationID)] detached metadata backend returned versionID=\(versionID)")
+                    return output
+                }
+                let output = try await withTaskCancellationHandler(
+                    operation: { try await request.value },
+                    onCancel: { request.cancel() }
                 )
                 userAccount.account = output.account
                 AppStore.this.saveAccountSnapshot(userAccount, id: accountIdentifier)
