@@ -643,9 +643,7 @@ class AppPackageArchive: ObservableObject {
                     minimumOS: minimumOS,
                     endpointLabel: endpoint.rawValue,
                     progress: { [weak self] message in
-                        await MainActor.run {
-                            self?.experimentalIPAMessage = message
-                        }
+                        await self?.updateExperimentalIPAMessage(message)
                     }
                 )
                 try Task.checkCancellation()
@@ -677,6 +675,10 @@ class AppPackageArchive: ObservableObject {
                 }
             }
         }
+    }
+
+    private func updateExperimentalIPAMessage(_ message: String) {
+        experimentalIPAMessage = message
     }
 
     private nonisolated static func elapsed(since date: Date) -> String {

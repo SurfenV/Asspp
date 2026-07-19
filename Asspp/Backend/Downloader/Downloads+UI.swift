@@ -165,7 +165,11 @@ enum ExperimentalIPABuilder {
         )
         try Task.checkCancellation()
 
-        guard let archive = try? Archive(url: patchedURL, accessMode: .read),
+        guard let archive = try? ZIPFoundation.Archive(
+            url: patchedURL,
+            accessMode: .read,
+            pathEncoding: nil
+        ),
               archive[patchResult.relativePath] != nil
         else {
             throw ExperimentalIPAError.invalidPatchedArchive
