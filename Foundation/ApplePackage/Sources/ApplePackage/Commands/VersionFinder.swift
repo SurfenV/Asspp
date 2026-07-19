@@ -30,6 +30,7 @@ public enum VersionFinder {
     public static func listReturningAccount(
         account initialAccount: Account,
         bundleIdentifier: String,
+        knownApp: Software? = nil,
         entityType: EntityType? = nil,
         externalVersionID: String? = nil
     ) async throws -> (versions: [String], account: Account) {
@@ -39,8 +40,20 @@ public enum VersionFinder {
         guard let countryCode = Configuration.countryCode(for: account.store) else {
             try ensureFailed(Strings.unsupportedStoreIdentifier(account.store))
         }
-        let app = try await Lookup.lookup(bundleID: bundleIdentifier, countryCode: countryCode, entityType: entityType)
-        APLogger.info("versions: lookup resolved appID=\(app.id) country=\(countryCode) elapsed=\(elapsed(since: startedAt))s")
+        let app: Software
+        if let knownApp,
+           knownApp.bundleID.caseInsensitiveCompare(bundleIdentifier) == .orderedSame
+        {
+            app = knownApp
+            APLogger.info("versions: using known appID=\(app.id) country=\(countryCode) elapsed=\(elapsed(since: startedAt))s")
+        } else {
+            app = try await Lookup.lookup(
+                bundleID: bundleIdentifier,
+                countryCode: countryCode,
+                entityType: entityType
+            )
+            APLogger.info("versions: lookup resolved appID=\(app.id) country=\(countryCode) elapsed=\(elapsed(since: startedAt))s")
+        }
         let resolvedExternalVersionID: String
         if let externalVersionID {
             resolvedExternalVersionID = externalVersionID

@@ -104,6 +104,7 @@ class AppPackageArchive: ObservableObject {
             return
         }
         let bundleID = package.software.bundleID
+        let knownApp = package.software
         let operationID = String(UUID().uuidString.prefix(8))
         let startedAt = Date()
         logger.info("[history:\(operationID)] version-list start bundle=\(bundleID) region=\(region)")
@@ -144,7 +145,8 @@ class AppPackageArchive: ObservableObject {
                 logger.info("[history:\(operationID)] value-based version request begin")
                 let output = try await VersionFinder.listReturningAccount(
                     account: initialUserAccount.account,
-                    bundleIdentifier: bundleID
+                    bundleIdentifier: bundleID,
+                    knownApp: knownApp
                 )
                 try Task.checkCancellation()
                 logger.info("[history:\(operationID)] detached version backend returned count=\(output.versions.count); dispatching UI callback")
